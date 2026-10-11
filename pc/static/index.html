@@ -28,6 +28,8 @@
   <main>
     <!-- 打球記録 -->
     <section id="tab-practice" class="tab active">
+      <div class="prac-grid">
+      <div class="prac-col prac-main">
       <div id="session-idle" class="card">
         <h2>練習</h2>
         <div id="theme-box-idle" class="theme-box"></div>
@@ -105,7 +107,31 @@
           <div id="session-summary"></div>
         </div>
       </div>
-
+      </div>
+      <div class="prac-col prac-notes">
+      <div class="note-area">
+        <div class="card" id="note-card">
+          <h2>振り返りノート</h2>
+          <label class="field">日付
+            <input id="note-day" type="date">
+          </label>
+          <label class="field">メモ（走り書きでOK）
+            <textarea id="note-memo" class="note-memo" rows="5" placeholder="例: 7番 右に出る球多い。後半は手元を低く意識したらまっすぐ出た。ドライバーは振り遅れ気味"></textarea>
+          </label>
+          <div id="note-videos" class="muted small"></div>
+          <div class="grid2">
+            <button type="button" id="btn-note-save" class="btn">メモだけ保存</button>
+            <button type="button" id="btn-note-ai" class="btn primary">AIで整理して保存</button>
+          </div>
+          <p id="note-status" class="muted small"></p>
+        </div>
+        <div class="card">
+          <h2>これまでのノート</h2>
+          <div id="note-list"></div>
+        </div>
+      </div>
+      </div>
+      <div class="prac-col prac-side">
       <div id="feel-card" class="card">
         <h2>感覚ノート（つかんだ感覚）</h2>
         <p class="muted small">うまくいったときの「〇〇な感じ」「〇〇のイメージ」を、何に効くかと一緒に残します。コースや練習で迷ったときに見返せます。振り返りノートをAIで整理すると、メモから自動で拾います。</p>
@@ -131,27 +157,7 @@
         <h2>コーチのメモ（記録から学習）</h2>
         <div id="coach"></div>
       </div>
-
-      <div class="note-area">
-        <div class="card" id="note-card">
-          <h2>振り返りノート</h2>
-          <label class="field">日付
-            <input id="note-day" type="date">
-          </label>
-          <label class="field">メモ（走り書きでOK）
-            <textarea id="note-memo" class="note-memo" rows="5" placeholder="例: 7番 右に出る球多い。後半は手元を低く意識したらまっすぐ出た。ドライバーは振り遅れ気味"></textarea>
-          </label>
-          <div id="note-videos" class="muted small"></div>
-          <div class="grid2">
-            <button type="button" id="btn-note-save" class="btn">メモだけ保存</button>
-            <button type="button" id="btn-note-ai" class="btn primary">AIで整理して保存</button>
-          </div>
-          <p id="note-status" class="muted small"></p>
-        </div>
-        <div class="card">
-          <h2>これまでのノート</h2>
-          <div id="note-list"></div>
-        </div>
+      </div>
       </div>
     </section>
 
@@ -372,9 +378,9 @@
       </div>
 
       <div class="card">
-        <h2>記録から学習（Claude）</h2>
-        <p class="muted small">パソコンに入っている Claude Code（claude コマンド）に記録を読ませて、コーチのメモを作ります。
-          コマンドプロンプトで一度 <code>claude</code> を起動してログインしておいてください。Claude の利用枠を使います。</p>
+        <h2>記録から学習（Claude・詳しい人向け）</h2>
+        <p class="muted small">コーチのメモは、ふつうは Gemini で作ります。パソコンに Claude Code（claude コマンド）が入っていれば、代わりにそちらを使います（Claude の利用枠を使います）。
+          使うときは、コマンドプロンプトで一度 <code>claude</code> を起動してログインしておいてください。入っていなければ、ここは空欄のままで大丈夫です。</p>
         <label class="field">claude コマンドの場所（ふつうは claude のままで大丈夫）
           <input id="claude-cmd-input" type="text" placeholder="claude">
         </label>

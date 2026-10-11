@@ -27,7 +27,7 @@ STATIC_DIR = APP_DIR / "static"
 CONFIG_PATH = APP_DIR / "config.json"
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".3gp"}
 # 画面 (static/app.js) と同じ番号にする。違うと画面に「start.bat を起動し直して」と出る
-APP_VERSION = 30
+APP_VERSION = 32
 RESTART_CODE = 3  # launcher.py がこの番号で終わったのを見て、起動し直す
 MAX_AI_IMAGES = 20  # 1回の分析で送る画像の上限 (1球あたり3枚)
 
@@ -781,11 +781,25 @@ def run_analysis(rec_id, only_clip=None):
 COACH = {"status": "none", "message": ""}
 
 
+def coach_engine():
+    """コーチのメモを作るのに使う AI。Claude Code が入っていればそれ、なければ Gemini。"""
+    import coach
+    if coach.has_cli(CONFIG.get("claude_cmd") or "claude"):
+        return "claude"
+    return "gemini" if gemini_key() else ""
+
+
 def run_learn():
     import coach
     try:
-        res = coach.learn(STORE.snapshot(), CLUB_NAMES, CONFIG.get("claude_cmd") or "claude",
-                          CONFIG.get("claude_model") or coach.DEFAULT_MODEL)
+        engine = coach_engine()
+        if engine == "claude":
+            res = coach.learn(STORE.snapshot(), CLUB_NAMES, CONFIG.get("claude_cmd") or "claude",
+                              CONFIG.get("claude_model") or coach.DEFAULT_MODEL)
+        elif engine == "gemini":
+            res = coach.learn_gemini(STORE.snapshot(), CLUB_NAMES, gemini_key(), CONFIG.get("gemini_model") or "")
+        else:
+            raise coach.CoachError("学習するには、Gemini の API キー（設定タブ）か、Claude Code が必要です。")
         with STORE.lock:
             STORE.state["coach"] = {**res, "updatedAt": int(time.time() * 1000)}
             STORE._write()
@@ -1072,6 +1086,7 @@ class Handler(BaseHTTPRequestHandler):
                 "version": APP_VERSION,
                 "hasGithubToken": update_token_ok(),
                 "publicUpdates": updater.PUBLIC,
+                "coachEngine": coach_engine(),
                 "setupDone": bool(CONFIG.get("setup_done")),
                 "lanUrl": lan_url(),
                 "lanAccess": CONFIG.get("host") == "0.0.0.0",
@@ -1238,7 +1253,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(job.public())
         if path == "/api/coach/learn":
             if COACH.get("status") != "running":
-                COACH.update(status="running", message="Claude が記録を読んでいます…（1〜3分ほど）")
+                name = {"claude": "Claude", "gemini": "Gemini"}.get(coach_engine(), "AI")
+                COACH.update(status="running", message=f"{name} が記録を読んでいます…（1〜3分ほど）")
                 threading.Thread(target=run_learn, daemon=True).start()
             return self.send_json({"ok": True})
         m = re.fullmatch(r"/api/swings/(\w+)/viewcrop", path)

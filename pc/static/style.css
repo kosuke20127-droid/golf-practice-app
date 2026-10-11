@@ -538,3 +538,24 @@ textarea { font-size: 13px; font-family: ui-monospace, monospace; resize: vertic
 .setup-box h2 { margin: 0; }
 .setup-ai { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 6px; }
 .setup-ai ol { margin: 0; padding-left: 1.3em; line-height: 1.7; }
+/* 練習タブ: ノートは日ごとにたためる。PC では2〜3列に並べる */
+.note-item > summary.day-head { cursor: pointer; list-style: none; }
+.note-item > summary.day-head::-webkit-details-marker { display: none; }
+.note-item > summary.day-head > span:first-child::before { content: '▸ '; color: var(--muted); }
+.note-item[open] > summary.day-head > span:first-child::before { content: '▾ '; }
+.note-item:not([open]) { padding-bottom: 4px; }
+.note-ai > summary { cursor: pointer; padding: 4px 0; }
+.feel-more > summary { cursor: pointer; padding: 6px 0; }
+.prac-col { min-width: 0; }
+@media (min-width: 1000px) {
+  #tab-practice.active { max-width: 1240px; }
+  .prac-grid { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.25fr); grid-template-rows: auto 1fr; grid-template-areas: "main notes" "side notes"; gap: 0 20px; align-items: start; }
+  .prac-main { grid-area: main; }
+  .prac-notes { grid-area: notes; }
+  .prac-side { grid-area: side; }
+}
+@media (min-width: 1500px) {
+  #tab-practice.active { max-width: 1640px; }
+  .prac-grid { grid-template-columns: minmax(380px, 1fr) minmax(460px, 1.3fr) minmax(340px, 0.9fr); grid-template-rows: auto; grid-template-areas: "main notes side"; }
+  .prac-main { position: sticky; top: 112px; }
+}

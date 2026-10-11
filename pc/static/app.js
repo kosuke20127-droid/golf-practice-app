@@ -69,7 +69,7 @@ const DIR_LABEL = { left: '左', center: 'センター', right: '右' };
 const CONTACT_LABEL = { good: 'ナイス', fat: 'ダフリ', thin: 'トップ', toe: '先・ヒール' };
 
 // server.py の APP_VERSION と同じ番号にする
-const APP_VERSION = 30;
+const APP_VERSION = 32;
 
 // ---------- 状態 ----------
 function defaultState() {
@@ -539,6 +539,8 @@ function tendencyLines(t = computeTendency()) {
 
 // ---------- コーチのメモ (Claude Code が記録から学習) ----------
 let coachRun = null; // { message }
+// コーチのメモを作る AI: パソコンに Claude Code があればそれ、なければ Gemini
+function engineName() { return { claude: 'Claude', gemini: 'Gemini' }[config.coachEngine] || 'AI'; }
 function renderCoach() {
   const box = $('#coach');
   if (!box) return;
@@ -549,19 +551,20 @@ function renderCoach() {
   if (c?.text) body.innerHTML = renderAnalysis(c.text);
   box.replaceChildren(...[
     c?.text
-      ? el('p', { class: 'muted tiny' }, `${fmtDate(c.updatedAt)} に ${c.swings}球の記録から作成${fresh ? `（そのあと ${fresh}球 増えています）` : ''}`)
-      : el('p', { class: 'muted small' }, '記録をパソコンの Claude（Sonnet）に読ませて、あなたのスイングの特徴・良いときの共通点・崩れるパターン・効いた練習をまとめます。'
+      ? el('p', { class: 'muted tiny' }, `${fmtDate(c.updatedAt)} に ${c.swings}球の記録から${c.engine === 'gemini' ? ' Gemini で' : c.engine === 'claude' ? ' Claude で' : ''}作成${fresh ? `（そのあと ${fresh}球 増えています）` : ''}`)
+      : el('p', { class: 'muted small' }, `記録を${engineName()}に読ませて、あなたのスイングの特徴・良いときの共通点・崩れるパターン・効いた練習をまとめます。`
         + '学習するたびに前のメモを見直して書き足すので、記録が増えるほどあなた向けになります。このメモは AI 分析や振り返りノートの整理にも使われます。'),
-    c?.text ? el('details', { class: 'coach-text', open: '' }, el('summary', { class: 'small strong' }, 'メモを見る'), body) : null,
+    !config.coachEngine ? el('p', { class: 'small weak-text' }, '学習するには、設定タブで Gemini の API キーを入れてください。') : null,
+    c?.text ? el('details', { class: 'coach-text' }, el('summary', { class: 'small strong' }, 'メモを見る'), body) : null,
     coachRun ? el('p', { class: 'small' }, coachRun.message) : null,
     el('div', { class: 'cand-btns' },
-      el('button', { type: 'button', class: 'btn small primary', ...(coachRun ? { disabled: '' } : {}), onclick: learnCoach },
-        c?.text ? '新しい記録で学習し直す（Claude）' : '記録から学習する（Claude）')),
+      el('button', { type: 'button', class: 'btn small primary', ...(coachRun || !config.coachEngine ? { disabled: '' } : {}), onclick: learnCoach },
+        c?.text ? `新しい記録で学習し直す（${engineName()}）` : `記録から学習する（${engineName()}）`)),
   ].filter(Boolean));
 }
 
 async function learnCoach() {
-  coachRun = { message: 'Claude が記録を読んでいます…（1〜3分ほど）' };
+  coachRun = { message: `${engineName()} が記録を読んでいます…（1〜3分ほど）` };
   renderCoach();
   try {
     await post('api/coach/learn');
@@ -3099,22 +3102,24 @@ function renderNotes() {
     $('#note-list').replaceChildren(el('div', { class: 'empty' }, 'まだノートがありません。練習のあとに、感じたことをメモしてみましょう。'));
     return;
   }
-  $('#note-list').replaceChildren(...notes.map((note) => {
+  // いちばん新しい日だけ開いておく (ほかは押すと開く)。開いた日は覚えておく
+  $('#note-list').replaceChildren(...notes.map((note, k) => {
     const recs = recordsOfDay(note.day);
     const { organized, rest } = noteSections(note.text || '');
     const text = el('div', { class: 'ai-result' });
     if (rest) text.innerHTML = renderAnalysis(rest);
     const org = el('div', { class: 'ai-result' });
     if (organized) org.innerHTML = renderAnalysis(organized);
-    return el('div', { class: 'note-item' },
-      el('div', { class: 'day-head' }, el('span', {}, fmtDayKey(note.day)),
+    const open = openNotes.has(note.day) || (k === 0 && !closedNotes.has(note.day));
+    const item = el('details', { class: 'note-item', ...(open ? { open: '' } : {}) },
+      el('summary', { class: 'day-head' }, el('span', {}, fmtDayKey(note.day)),
         el('span', { class: 'muted small' }, note.text ? 'AIで整理済み' : 'メモのみ')),
       organized ? el('div', { class: 'note-org-box' }, el('div', { class: 'small strong' }, 'メモの整理'), org) : null,
       note.memo && organized ? el('details', { class: 'small' }, el('summary', { class: 'muted' }, '書いたままのメモ'),
         el('p', { class: 'note-raw' }, note.memo)) : null,
       note.memo && !organized ? el('div', { class: 'note-memo-box' }, el('div', { class: 'small strong' }, 'あなたのメモ'),
         el('p', { class: 'note-raw' }, note.memo)) : null,
-      rest ? el('div', {}, el('div', { class: 'small strong note-ai-head' }, '技術的な補足（AI）'), text) : null,
+      rest ? el('details', { class: 'note-ai' }, el('summary', { class: 'small strong note-ai-head' }, '技術的な補足・次の練習でやること（AI）'), text) : null,
       recs.length ? el('div', { class: 'note-videos' },
         el('div', { class: 'muted small' }, 'この日の動画（押すと開きます）'),
         el('div', { class: 'swing-cards' }, recs.map((rec) => el('button', {
@@ -3138,8 +3143,14 @@ function renderNotes() {
           state.notes = state.notes.filter((n) => n.id !== note.id);
           renderNotes();
         } }, '削除')));
+    item.addEventListener('toggle', () => {
+      if (item.open) { openNotes.add(note.day); closedNotes.delete(note.day); } else { openNotes.delete(note.day); closedNotes.add(note.day); }
+    });
+    return item;
   }));
 }
+const openNotes = new Set();
+const closedNotes = new Set();
 
 // ---------- 感覚ノート (本人がつかんだ感覚・イメージ) ----------
 // AI の答えの末尾の {"feels": [...]} を取り出す (pc/ai.py の split_feels と同じ)
@@ -3221,7 +3232,10 @@ function renderFeels() {
   const list = $('#feel-list');
   if (!list) return;
   const feels = [...(state.feels || [])].sort((a, b) => (b.at || 0) - (a.at || 0));
-  list.replaceChildren(...(feels.length ? feels.map((f) => feelItem(f))
+  // 新しい3つだけ出して、残りはたたむ
+  const more = feels.length > 3 ? el('details', { class: 'feel-more' },
+    el('summary', { class: 'small strong' }, `ほかの感覚 ${feels.length - 3}件を見る`), ...feels.slice(3).map((f) => feelItem(f))) : null;
+  list.replaceChildren(...(feels.length ? [...feels.slice(0, 3).map((f) => feelItem(f)), more].filter(Boolean)
     : [el('p', { class: 'muted small' }, 'まだありません。振り返りノートに「〇〇な感じで振ったら良かった」のように書いてAIで整理すると、ここにたまっていきます。')]));
   $('#feel-quick').hidden = !feels.length;
   $('#feel-quick-list').replaceChildren(...feels.map((f) => feelItem(f, true)));

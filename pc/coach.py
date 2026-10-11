@@ -154,13 +154,49 @@ def find_cli(cmd):
     return path
 
 
-def learn(state, club_names, cmd="claude", model=DEFAULT_MODEL, timeout=600):
-    """Claude に記録を読ませて、コーチのメモを作る。戻り値は {text, summary, swings}。"""
+def has_cli(cmd):
+    return bool(shutil.which(cmd or "claude"))
+
+
+def _request(state, club_names):
     data, count = build_input(state, club_names)
     if count < 3:
         raise CoachError("学習するには、スイングの記録が3球以上必要です。")
     prev = (state.get("coach") or {}).get("text") or "（まだありません）"
-    stdin = f"{INSTRUCTION}\n\n# これまでのコーチのメモ\n{prev}\n\n# 記録\n{data}\n"
+    return f"{INSTRUCTION}\n\n# これまでのコーチのメモ\n{prev}\n\n# 記録\n{data}\n", count
+
+
+def _parse(out, count, engine):
+    summary = ""
+    m = None
+    for m in re.finditer(r"```\s*json\s*(\{.*?\})\s*```", out, re.S | re.I):
+        pass
+    text = out
+    if m:
+        try:
+            summary = str(json.loads(m.group(1)).get("summary") or "")
+        except ValueError:
+            summary = ""
+        text = out[:m.start()].rstrip()
+    if not summary:
+        summary = re.sub(r"\s+", " ", text)[:400]
+    return {"text": text, "summary": summary[:600], "swings": count, "engine": engine}
+
+
+def learn_gemini(state, club_names, api_key, model=""):
+    """Claude Code がないパソコンでは、Gemini に同じことを頼む。"""
+    import ai
+    stdin, count = _request(state, club_names)
+    try:
+        out = ai.generate_text(api_key, model, stdin)
+    except ai.AnalysisError as e:
+        raise CoachError(str(e)) from e
+    return _parse(out, count, "gemini")
+
+
+def learn(state, club_names, cmd="claude", model=DEFAULT_MODEL, timeout=600):
+    """Claude に記録を読ませて、コーチのメモを作る。戻り値は {text, summary, swings, engine}。"""
+    stdin, count = _request(state, club_names)
     path = find_cli(cmd)
     base = [path, "-p", "Follow the instructions given on standard input. Reply in Japanese.",
             "--model", model or DEFAULT_MODEL, "--output-format", "text", "--no-session-persistence"]
@@ -185,17 +221,4 @@ def learn(state, club_names, cmd="claude", model=DEFAULT_MODEL, timeout=600):
             raise CoachError("Claude にログインしていないようです。コマンドプロンプトで claude を起動してログインしてください。"
                              f"（{msg}）")
         raise CoachError(f"Claude でエラーが起きました: {msg or '返事が空でした'}")
-    summary = ""
-    m = None
-    for m in re.finditer(r"```\s*json\s*(\{.*?\})\s*```", out, re.S | re.I):
-        pass
-    text = out
-    if m:
-        try:
-            summary = str(json.loads(m.group(1)).get("summary") or "")
-        except ValueError:
-            summary = ""
-        text = out[:m.start()].rstrip()
-    if not summary:
-        summary = re.sub(r"\s+", " ", text)[:400]
-    return {"text": text, "summary": summary[:600], "swings": count}
+    return _parse(out, count, "claude")

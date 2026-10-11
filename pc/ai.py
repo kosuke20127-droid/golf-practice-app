@@ -243,6 +243,21 @@ def organize_note(api_key, model, memo, day_label, swing_lines, tendency=(), the
     return text
 
 
+def generate_text(api_key, model, prompt):
+    """画像なしで文章を書いてもらう (コーチのメモなど)。"""
+    client = genai.Client(api_key=api_key) if api_key else genai.Client()
+    try:
+        res = client.models.generate_content(model=model or DEFAULT_MODEL, contents=[prompt])
+    except errors.APIError as e:
+        raise AnalysisError(_error_message(e)) from e
+    except (OSError, ValueError) as e:
+        raise AnalysisError(f"Gemini につながりませんでした。インターネット接続を確認してください。({e})") from e
+    text = (res.text or "").strip()
+    if not text:
+        raise AnalysisError("返事が空でした。もう一度お試しください。")
+    return text
+
+
 def _error_message(e):
     text = (getattr(e, "message", None) or str(e)).lower()
     code = getattr(e, "code", 0) or 0
