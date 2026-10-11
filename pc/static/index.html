@@ -14,6 +14,7 @@
 <body>
   <header class="app-header">
     <h1>⛳ ゴルフ練習ノート</h1>
+    <span id="app-badge" class="app-badge"></span>
   </header>
 
   <div id="update-banner" class="update-banner" hidden>
@@ -290,6 +291,7 @@
         <h2>スイング記録</h2>
         <div id="pose-all" class="pose-all"></div>
         <div id="record-filters" class="record-filters"></div>
+        <div id="ideal-swings" class="ideal-swings"></div>
         <div id="swing-records"></div>
       </div>
       </div>
@@ -300,6 +302,10 @@
       <div class="card wide">
         <h2>分析タブでわかること</h2>
         <div id="stats-guide"></div>
+      </div>
+      <div class="card wide">
+        <h2>弾道と体の動き（再現性）</h2>
+        <div id="flight-analysis" class="viz-root"></div>
       </div>
       <div class="card wide">
         <h2>スイングの点数・数値の推移</h2>

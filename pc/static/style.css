@@ -559,3 +559,41 @@ textarea { font-size: 13px; font-family: ui-monospace, monospace; resize: vertic
   .prac-grid { grid-template-columns: minmax(380px, 1fr) minmax(460px, 1.3fr) minmax(340px, 0.9fr); grid-template-rows: auto; grid-template-areas: "main notes side"; }
   .prac-main { position: sticky; top: 112px; }
 }
+.unseen-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; background: var(--primary); color: var(--primary-text); font-size: 11px; font-weight: 700; vertical-align: middle; }
+.unseen-count { color: var(--primary); font-weight: 700; }
+.linkish { background: none; border: none; padding: 0; color: var(--muted); text-decoration: underline; cursor: pointer; font: inherit; font-size: 12px; }
+.flight-badge.auto { opacity: 0.8; border-style: dashed; }
+.ideal-swings { margin-bottom: 8px; }
+.ideal-group .club-head { border-bottom-color: var(--accent); }
+.compare-measure > div { align-self: center; }
+.app-header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; } .app-badge { font-size: 11px; opacity: 0.85; white-space: nowrap; }
+.cal-tag { margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 11px; background: var(--chip); border: 1px dashed var(--border); color: var(--muted); }
+/* 弾道と体の動き: 系列の色 (データ可視化の基準パレット 1〜4 番。明るい画面と暗い画面で別の段) */
+.viz-root { --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --grid: rgba(0, 0, 0, 0.12); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .viz-root { --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --grid: rgba(255, 255, 255, 0.14); }
+}
+:root[data-theme="dark"] .viz-root { --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --grid: rgba(255, 255, 255, 0.14); }
+.fa-h { font-size: 14px; margin: 14px 0 6px; }
+.fa-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 6px; color: var(--text); }
+.fa-key { display: inline-flex; align-items: center; gap: 5px; }
+.fa-sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.fa-sw.s1, .fa-seg.s1 { background: var(--series-1); } .fa-sw.s2, .fa-seg.s2 { background: var(--series-2); }
+.fa-sw.s3, .fa-seg.s3 { background: var(--series-3); } .fa-sw.s4, .fa-seg.s4 { background: var(--series-4); }
+.fa-bar-row { display: grid; grid-template-columns: 7.5em minmax(0, 1fr) 3.5em; gap: 8px; align-items: center; margin: 4px 0; }
+.fa-bar { display: flex; gap: 2px; height: 22px; border-radius: 4px; overflow: hidden; }
+.fa-seg { display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; min-width: 4px; }
+.fa-seg:hover { filter: brightness(1.12); }
+.fa-bar-n { text-align: right; }
+.fa-radar { width: 100%; max-width: 480px; height: auto; display: block; margin: 0 auto; }
+.fa-grid { fill: none; stroke: var(--grid); stroke-width: 1; }
+.fa-axis { font-size: 11px; fill: var(--muted); }
+.fa-ring { font-size: 9px; fill: var(--muted); }
+.fa-poly { stroke-width: 2; fill-opacity: 0.12; }
+.fa-poly.s1, .fa-dot.s1 { stroke: var(--series-1); fill: var(--series-1); } .fa-poly.s2, .fa-dot.s2 { stroke: var(--series-2); fill: var(--series-2); }
+.fa-poly.s3, .fa-dot.s3 { stroke: var(--series-3); fill: var(--series-3); }
+.fa-dot { stroke: var(--card); stroke-width: 2; fill-opacity: 1; cursor: default; }
+.fa-dot:hover { r: 6; }
+.fa-insight { margin: 6px 0; padding-left: 1.2em; line-height: 1.7; }
+.fa-days { padding-left: 1.2em; line-height: 1.8; margin: 0; }
+.fa-table { margin: 6px 0; }

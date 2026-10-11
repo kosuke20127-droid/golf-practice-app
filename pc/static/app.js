@@ -69,7 +69,7 @@ const DIR_LABEL = { left: '左', center: 'センター', right: '右' };
 const CONTACT_LABEL = { good: 'ナイス', fat: 'ダフリ', thin: 'トップ', toe: '先・ヒール' };
 
 // server.py の APP_VERSION と同じ番号にする
-const APP_VERSION = 32;
+const APP_VERSION = 44;
 
 // ---------- 状態 ----------
 function defaultState() {
@@ -501,7 +501,7 @@ function tendencyStats(swings) {
 }
 
 function computeTendency() {
-  const all = (state.swings || []).flatMap((rec) => (rec.swings || []).map((sw) => ({ rec, sw })))
+  const all = mySwingRecs().flatMap((rec) => (rec.swings || []).map((sw) => ({ rec, sw })))
     .filter((x) => x.sw.pose?.items?.length)
     .sort((a, b) => swingTime(b.rec, b.sw) - swingTime(a.rec, a.sw));
   if (all.length < 3) return null;
@@ -727,7 +727,7 @@ function renderDrills() {
     };
     // 私の苦手のドリルを先に。苦手の最近の解消率も出す
     const ids = typeof focusIds === 'function' ? focusIds() : [];
-    const recent = (state.swings || []).flatMap((r) => r.swings || []).slice(-60);
+    const recent = mySwingRecs().flatMap((r) => r.swings || []).slice(-60);
     const rates = typeof focusRates === 'function' ? focusRates(recent, ids) : [];
     const mine = FOCUS_DRILLS.filter((d) => ids.includes(d.focus));
     const others = FOCUS_DRILLS.filter((d) => !ids.includes(d.focus));
@@ -791,7 +791,8 @@ async function closeDrill() {
 }
 
 // ---------- 動画タブ ----------
-const FRAME_STEP = 1 / 30;
+// 60コマ/秒の動画でも1コマずつ送れるように (30コマ/秒の動画では2回押すと1コマ進む)
+const FRAME_STEP = 1 / 60;
 // インパクトを0秒としたときの切り出し位置(秒)と、だいたいの局面 (pc/video.py の PHASES と同じ)
 // v1: claude.ai 版初期の8コマ、v2: いまの16コマ
 const PHASE_SETS = {
@@ -839,9 +840,9 @@ const openRecords = new Set();
 const analysisTimers = {};
 
 function fmtSec(t) { return (Math.round(t * 100) / 100).toFixed(2); }
-function fmtClock(t) {
+function fmtClock(t, digits = 1) {
   const m = Math.floor(t / 60);
-  return `${m}:${(t - m * 60).toFixed(1).padStart(4, '0')}`;
+  return `${m}:${(t - m * 60).toFixed(digits).padStart(3 + digits, '0')}`;
 }
 function fmtMB(bytes) { return `${(bytes / 1048576).toFixed(bytes < 10485760 ? 1 : 0)} MB`; }
 
@@ -1073,7 +1074,7 @@ async function addCandidateHere() {
   const v = $('#video');
   if (!job || !v.duration) { toast('動画の準備ができてから押してください'); return; }
   v.pause();
-  const c = { t: v.currentTime, on: true, thumb: '' };
+  const c = { t: v.currentTime, on: true, thumb: '', manual: true };
   await setCandidateTime(c, v.currentTime);
   candidates.push(c);
   candidates.sort((x, y) => x.t - y.t);
@@ -1095,6 +1096,7 @@ async function previewCandidate(c) {
 }
 
 async function nudgeCandidate(c, dt) {
+  c.manual = true;
   await setCandidateTime(c, Math.max(0, c.t + dt));
   renderCandidates();
 }
@@ -1116,12 +1118,14 @@ function renderCandidates() {
       c.thumb ? el('img', { src: c.thumb, alt: '', class: 'cand-thumb' }) : el('div', { class: 'cand-thumb' })),
     el('div', { class: 'cand-info' },
       el('div', { class: 'strong' }, n),
-      el('div', { class: 'muted small' }, `インパクト ${fmtClock(c.t)}`),
+      el('div', { class: 'muted small' }, `インパクト ${fmtClock(c.t, 2)}`),
       c.warn ? el('div', { class: 'small warn-text' }, `⚠ ${c.warn}`) : null,
       el('div', { class: 'cand-btns' },
         el('button', { type: 'button', class: 'btn small', onclick: () => previewCandidate(c) }, '▶︎ 見る'),
-        el('button', { type: 'button', class: 'btn small', onclick: () => nudgeCandidate(c, -0.1), 'aria-label': '0.1秒前へ' }, '−0.1'),
-        el('button', { type: 'button', class: 'btn small', onclick: () => nudgeCandidate(c, 0.1), 'aria-label': '0.1秒後へ' }, '+0.1'))));
+        el('button', { type: 'button', class: 'btn small', onclick: () => nudgeCandidate(c, -FRAME_STEP), 'aria-label': '1コマ前へ' }, '◀ 1コマ'),
+        el('button', { type: 'button', class: 'btn small', onclick: () => nudgeCandidate(c, FRAME_STEP), 'aria-label': '1コマ後へ' }, '1コマ ▶'),
+        el('button', { type: 'button', class: 'btn small', onclick: () => nudgeCandidate(c, $('#video').currentTime - c.t),
+          title: '上の動画で止めている位置を、この球のインパクトにする' }, '動画の位置にする'))));
   const more = rejected.length ? el('details', { class: 'fold rejected-cands' },
     el('summary', { class: 'small muted' }, `スイングではなさそうな音 ${rejected.length}件（隣の打席・ボールを置いた音など。押すと見られます）`),
     ...rejected.map((c) => row(c, `音 ${fmtClock(c.t)}`))) : null;
@@ -1145,6 +1149,7 @@ async function saveRecord(analyze) {
   try {
     job = await post(`api/jobs/${job.id}/save`, {
       impacts: chosen.map((c) => c.t),
+      manual: chosen.map((c) => !!c.manual), // 自分で合わせたインパクトは、サーバーで動かさない
       club: videoClub,
       angle: pickerValue('angle-picker'),
       concern: $('#video-concern').value.trim(),
@@ -1313,7 +1318,7 @@ function frameView(sw, i, cls = 'frame') {
   return box;
 }
 
-function clipPlayer(sw, label) {
+function clipPlayer(sw, label, rec = null) {
   if (!sw.clip) return null;
   const v = el('video', { class: 'clip', src: (showLines && sw.pose?.linesClip) || sw.clip, controls: '', playsinline: '', preload: 'metadata', 'aria-label': label });
   const impact = sw.clipOffset ?? 2.5;
@@ -1327,7 +1332,7 @@ function clipPlayer(sw, label) {
   v.addEventListener('loadedmetadata', showPos);
   const step = (n) => {
     v.pause();
-    v.currentTime = Math.min(Math.max(0, v.currentTime + n / 30), (v.duration || 99) - 0.01);
+    v.currentTime = Math.min(Math.max(0, v.currentTime + n / 60), (v.duration || 99) - 0.01);
   };
   // 動画を選んだ状態で ← → を押すと 1コマずつ動く
   v.addEventListener('keydown', (e) => {
@@ -1354,8 +1359,26 @@ function clipPlayer(sw, label) {
         v.pause();
         v.currentTime = impact;
       } }, 'インパクトへ'),
-      el('button', { type: 'button', class: 'btn small', onclick: () => fineFrames(sw, fine) }, '1/30秒ごとのコマを見る')),
+      el('button', { type: 'button', class: 'btn small', onclick: () => fineFrames(sw, fine) }, '1/30秒ごとのコマを見る'),
+      rec ? el('button', { type: 'button', class: 'btn small', title: '動画を止めている位置を、この球のインパクトにして、コマ・軌道・計測を作り直します',
+        onclick: () => fixImpact(rec, sw, v.currentTime) }, 'この位置をインパクトにする') : null),
     fine);
+}
+
+// 保存した球のインパクトの位置を直す (止めている位置をインパクトにして作り直す)
+async function fixImpact(rec, sw, at) {
+  const d = at - (sw.clipOffset ?? 2.5);
+  if (Math.abs(d) < 0.005) { toast('今のインパクトと同じ位置です。動画をクラブがボールに当たるコマで止めてから押してください'); return; }
+  if (!(await askConfirm(`インパクトを ${d > 0 ? '+' : ''}${d.toFixed(2)}秒 ずらして、コマ・軌道・計測を作り直します（10秒ほど）。よろしいですか？`, '作り直す'))) return;
+  toast('作り直しています…');
+  try {
+    await post(`api/swings/${rec.id}/impact`, { clip: sw.clip, at });
+    await reloadState();
+    renderSwingRecords();
+    toast('インパクトを直して、測り直しました');
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 // 切り出し動画から 1/30 秒ごとのコマを取り出して並べる (パソコンの中だけで作る・AIは使わない)
@@ -1490,9 +1513,9 @@ function renderPose(sw) {
   if (p.error) return el('p', { class: 'muted small' }, `体の動き: ${p.error}`);
   return el('div', { class: 'pose-box' },
     el('div', { class: 'small strong' }, `体の動き（自動計測・${p.view}から）`),
-    el('table', { class: 'pose-table' }, el('tbody', {}, p.items.map((it) => el('tr', {},
+    el('table', { class: 'pose-table' }, el('tbody', {}, [...p.items, ...(flightItem(sw) ? [{ ...flightItem(sw), hint: `点数の${Math.round(flightItem(sw).share * 100)}%を弾道で決めています（ストレート100・ドロー/フェード95・プッシュ/引っかけ65・スライス/フック30・ダフリ/トップ/テンプラ20）` }] : [])].map((it) => el('tr', {},
       el('td', { class: `grade g${it.grade === '◎' ? 2 : it.grade === '○' ? 1 : 0}` }, it.grade || ''),
-      el('td', {}, el('div', {}, it.label, focusKeys().includes(it.key) ? el('span', { class: 'focus-tag' }, '苦手') : null), el('div', { class: 'muted tiny' }, it.hint)),
+      el('td', {}, el('div', {}, it.label, focusKeys().includes(it.key) ? el('span', { class: 'focus-tag' }, '苦手') : null, it.calibrated ? el('span', { class: 'cal-tag', title: `もとの判定は${it.baseGrade}。理想のスイングに合わせて目安を広げています` }, '理想に合わせて補正') : null), el('div', { class: 'muted tiny' }, it.hint)),
       el('td', { class: 'pose-val' }, it.display))))),
     focusCheck(sw).length ? el('p', { class: 'small focus-line' }, '苦手のチェック: ', ...focusCheck(sw).map((c) =>
       el('span', { class: c.ok ? 'focus-ok' : 'focus-ng' }, `${c.ok ? '✓ 直せた' : '✗ 出た'}: ${c.label}`))) : null,
@@ -1539,7 +1562,7 @@ async function measurePose(rec) {
 // --- 推移グラフ (1日ごとの平均) ---
 function trendData() {
   const byDay = new Map();
-  for (const rec of state.swings || []) {
+  for (const rec of mySwingRecs() || []) {
     if (trendCat !== 'all' && clubCat(rec.club) !== trendCat) continue;
     for (const sw of rec.swings || []) {
       const value = trendMetric === 'score_measure' ? measureScore(sw)
@@ -1579,7 +1602,7 @@ function renderTrend() {
     sel('trend-cat', [['all', 'すべてのクラブ'], ...CLUB_CATS.map((c) => [c.id, c.label])], trendCat, (v) => { trendCat = v; renderTrend(); }));
   const data = trendData();
   if (!data.length) {
-    const total = (state.swings || []).reduce((a, r) => a + (r.swings?.length || 0), 0);
+    const total = mySwingRecs().reduce((a, r) => a + (r.swings?.length || 0), 0);
     box.replaceChildren(controls, el('div', { class: 'empty' }, !total
       ? 'まだスイング動画の記録がありません。動画タブで動画を記録すると、ここに練習日ごとの推移が出ます。'
       : trendMetric === 'score_ai'
@@ -1713,6 +1736,7 @@ const RATINGS = [
   { id: 'ok', label: '普通' },
   { id: 'bad', label: '要改善' },
   { id: 'none', label: '未採点' },
+  { id: 'unseen', label: 'まだ見ていない' },
   { id: 'notswing', label: 'スイングなし？' },
 ];
 // 弾道のラベル (pc/server.py の FLIGHTS と同じ)
@@ -1749,7 +1773,7 @@ function userLabel(sw) {
   return null;
 }
 function labeledSwings() {
-  return (state.swings || []).flatMap((r) => r.swings || [])
+  return mySwingRecs().flatMap((r) => r.swings || [])
     .filter((sw) => userLabel(sw) != null && (sw.pose?.items || []).filter((it) => it.grade in GRADE_POINTS).length >= 3);
 }
 // 一致度: 「良い」の球と「悪い」の球を1組ずつ比べて、良いほうの点数が高い組の割合 (同点は半分)
@@ -1761,22 +1785,37 @@ function agreement(swings, scoreOf) {
   for (const a of pos) for (const b of neg) s += a > b ? 1 : a === b ? 0.5 : 0;
   return s / (pos.length * neg.length);
 }
-function scoreWith(sw, weights) {
+// 弾道も点数に入れる。打った球の結果がいちばん大事なので、点数の半分 (自動で読んだ弾道は4割) を弾道で決める。
+// 自分で付けた弾道があればそれ、なければ動画から自動で読んだ弾道 (試験版)
+const FLIGHT_POINTS = { straight: 100, draw: 95, fade: 95, push: 65, pull: 65, slice: 30, hook: 30, fat: 20, thin: 20, sky: 20 };
+const FLIGHT_GRADE_OF = (pt) => (pt >= 90 ? '◎' : pt >= 60 ? '○' : '△');
+function flightItem(sw) {
+  const own = sw.flight && FLIGHT_POINTS[sw.flight] != null;
+  const auto = !own && sw.ballAuto?.label && FLIGHT_POINTS[sw.ballAuto.label] != null;
+  if (!own && !auto) return null;
+  const f = own ? sw.flight : sw.ballAuto.label;
+  return { key: 'flight', label: '弾道', points: FLIGHT_POINTS[f], grade: FLIGHT_GRADE_OF(FLIGHT_POINTS[f]), share: own ? 0.5 : 0.4,
+    display: `${FLIGHT_LABEL[f] || f}${own ? '' : '（自動で読んだ弾道）'}` };
+}
+// withFlight=false は、印との一致度を調べるとき (弾道から印を決めた球があるので、弾道を入れると当たり前に一致してしまう)
+function scoreWith(sw, weights, withFlight = true) {
   const items = (sw.pose?.items || []).filter((it) => it.grade in GRADE_POINTS);
   const fk = focusKeys();
   const w = (it) => (weights[it.key] ?? 1) * (fk.includes(it.key) ? 2 : 1);
-  return items.reduce((a, it) => a + GRADE_POINTS[it.grade] * w(it), 0) / items.reduce((a, it) => a + w(it), 0);
+  const pose = items.reduce((a, it) => a + GRADE_POINTS[it.grade] * w(it), 0) / items.reduce((a, it) => a + w(it), 0);
+  const fi = withFlight ? flightItem(sw) : null;
+  return fi ? pose * (1 - fi.share) + fi.points * fi.share : pose;
 }
 function scoringStatus() {
   const swings = labeledSwings();
-  const now = agreement(swings, (sw) => scoreWith(sw, state.scoring?.weights || {}));
+  const now = agreement(swings, (sw) => scoreWith(sw, state.scoring?.weights || {}, false));
   return { n: swings.length, good: swings.filter((sw) => userLabel(sw) === 1).length, bad: swings.filter((sw) => userLabel(sw) === 0).length, now };
 }
 // 項目ごとの重みを、一致度がいちばん高くなるように1つずつ選ぶ (同じくらいなら 1 に近いほう)
 function learnScoring() {
   const swings = labeledSwings();
   const keys = [...new Set(swings.flatMap((sw) => sw.pose.items.map((it) => it.key)))];
-  const before = agreement(swings, (sw) => scoreWith(sw, {}));
+  const before = agreement(swings, (sw) => scoreWith(sw, {}, false));
   if (before == null) return null;
   const weights = Object.fromEntries(keys.map((k) => [k, 1]));
   let best = before;
@@ -1785,7 +1824,7 @@ function learnScoring() {
     for (const k of keys) {
       let pick = weights[k]; let pickVal = best;
       for (const v of WEIGHT_STEPS) {
-        const val = agreement(swings, (sw) => scoreWith(sw, { ...weights, [k]: v }));
+        const val = agreement(swings, (sw) => scoreWith(sw, { ...weights, [k]: v }, false));
         const closer = Math.abs(Math.log(v)) < Math.abs(Math.log(pick));
         // 球が少ないと偶然に合わせてしまうので、はっきり良くなるときだけ変える
         if (val > pickVal + 0.02 || (Math.abs(val - pickVal) <= 0.005 && closer && val >= best)) { pick = v; pickVal = val; }
@@ -1847,7 +1886,9 @@ const FOCUS_OPTIONS = [
   { id: 'hip', label: 'お尻が前に出る', keys: ['hip_line'] },
   { id: 'head', label: '頭が動く', keys: ['head_side', 'sway'] },
   { id: 'arm', label: '左腕が曲がる', keys: ['lead_arm'] },
+  { id: 'path', label: 'アウトから下りる（手元の通り道）', keys: ['hand_path'] },
   { id: 'tempo', label: '打ち急ぐ（テンポ）', keys: ['tempo'] },
+  { id: 'tense', label: '力む（切り返しで打ちにいく）', keys: ['transition', 'back_smooth'] },
   { id: 'setup', label: 'アドレスの前傾が浅い・深い', keys: ['address_tilt'] },
   { id: 'finish', label: 'フィニッシュで体重が残る', keys: ['finish_weight'] },
 ];
@@ -1868,6 +1909,12 @@ function focusCheck(sw) {
     out.push({ label: f.label, ok: its.every((it) => it.grade !== '△') });
   }
   return out;
+}
+function unseenSummary(items) {
+  const n = items.filter((x) => !isSeen(x.sw)).length;
+  if (!n) return '';
+  return [' ・ ', el('span', { class: 'unseen-count' }, `まだ見ていない ${n}球`), ' ',
+    el('button', { type: 'button', class: 'linkish', onclick: () => markAllSeen(items) }, '全部見たことにする')];
 }
 function focusSummary(swings) {
   const checked = swings.map(focusCheck).filter((c) => c.length);
@@ -1898,7 +1945,7 @@ const FOCUS_RECENT = 40;
 function autoUpdateFocus() {
   const f = state.focus || {};
   if (f.auto === false) return;
-  const recent = (state.swings || []).flatMap((r) => (r.swings || []).map((sw) => ({ sw, t: swingTime(r, sw) })))
+  const recent = mySwingRecs().flatMap((r) => (r.swings || []).map((sw) => ({ sw, t: swingTime(r, sw) })))
     .filter((x) => (x.sw.pose?.items || []).length && !x.sw.pose?.notSwing)
     .sort((a, b) => b.t - a.t).slice(0, FOCUS_RECENT);
   if (recent.length < 15) return;
@@ -1954,7 +2001,7 @@ function focusHistoryView() {
 function focusTrendView() {
   if (!focusIds().length) return null;
   const byDay = new Map();
-  for (const r of state.swings || []) for (const sw of r.swings || []) {
+  for (const r of mySwingRecs() || []) for (const sw of r.swings || []) {
     const d = dayKey(swingTime(r, sw));
     if (!byDay.has(d)) byDay.set(d, []);
     byDay.get(d).push(sw);
@@ -2029,6 +2076,7 @@ function swingMatches(sw) {
     case 'ok': return effVerdict(sw) === 'ok';
     case 'bad': return effVerdict(sw) === 'bad' || sw.mark === 'bad';
     case 'none': return effScore(sw) == null;
+    case 'unseen': return !isSeen(sw);
     case 'notswing': return !!sw.pose?.notSwing;
     default: return true;
   }
@@ -2054,7 +2102,11 @@ function allSwings() {
 function findModel(rec, idx) {
   const cat = clubCat(rec.club);
   const others = allSwings().filter((x) => clubCat(x.rec.club) === cat && !(x.rec.id === rec.id && x.idx === idx));
-  return others.find((x) => x.sw.mark === 'good')
+  // 理想のスイングがあれば最優先 (同じクラブ → 同じ種類のクラブ。計測できている球のうち点数の高いもの)
+  const ideal = (list) => list.filter((x) => isIdeal(x.rec) && (x.sw.pose?.items || []).length)
+    .sort((a, b) => (measureScore(b.sw) ?? 0) - (measureScore(a.sw) ?? 0))[0];
+  return ideal(others.filter((x) => x.rec.club === rec.club)) || ideal(others)
+    || others.find((x) => x.sw.mark === 'good')
     || others.filter((x) => x.sw.score != null).sort((a, b) => b.sw.score - a.sw.score)[0];
 }
 
@@ -2125,10 +2177,27 @@ function toggleCompare(recId, idx) {
 
 function compareWithModel(rec, idx) {
   const model = findModel(rec, idx);
-  if (!model) { toast('比べるお手本がまだありません。良かった球に 👍 を付けてください'); return; }
+  if (!model) { toast('比べるお手本がまだありません。理想のスイングを入れるか、良かった球に 👍 を付けてください'); return; }
+  if (viewer) closeViewer();
   setCompare([{ recId: model.rec.id, idx: model.idx }, { recId: rec.id, idx }]);
 }
 
+// 2球の計測を項目ごとに並べる (片方にしかない項目も出す)
+function compareMeasureRows(a, b) {
+  const ia = a.pose?.items || []; const ib = b.pose?.items || [];
+  const keys = [...new Set([...ia, ...ib].map((it) => it.key))];
+  if (!keys.length) return [];
+  const cell = (it) => (it ? el('div', { class: 'small' }, el('span', { class: `grade g${it.grade === '◎' ? 2 : it.grade === '○' ? 1 : 0}` }, it.grade || ''), ' ', it.display) : el('div', { class: 'muted small' }, '—'));
+  const ms = (sw) => measureScore(sw);
+  return [
+    el('div', { class: 'compare-row' }, el('div', { class: 'muted small phase-label' }, '計測の点数'),
+      el('div', { class: 'strong' }, ms(a) != null ? `${ms(a)}点` : '—'), el('div', { class: 'strong' }, ms(b) != null ? `${ms(b)}点` : '—')),
+    ...keys.map((k) => {
+      const x = ia.find((it) => it.key === k); const y = ib.find((it) => it.key === k);
+      return el('div', { class: 'compare-row compare-measure' }, el('div', { class: 'muted small phase-label' }, shortLabel((x || y).label)), cell(x), cell(y));
+    }),
+  ];
+}
 function renderCompare() {
   const swings = allSwings();
   $('#compare-card').hidden = swings.length < 2;
@@ -2175,6 +2244,7 @@ function renderCompare() {
   $('#compare-body').replaceChildren(
     pickers,
     el('div', { class: 'compare-row compare-head' }, el('div', {}), head(items[0]), head(items[1])),
+    ...compareMeasureRows(a, b),
     trailSrc(a) || trailSrc(b)
       ? el('div', { class: 'compare-row' },
         el('div', { class: 'muted small phase-label' }, 'クラブ軌道'),
@@ -2190,7 +2260,7 @@ function renderCompare() {
 // --- 記録一覧 ---
 function flightCounts(cat = 'all') {
   const counts = {};
-  for (const rec of state.swings || []) {
+  for (const rec of mySwingRecs() || []) {
     if (cat !== 'all' && clubCat(rec.club) !== cat) continue;
     for (const sw of rec.swings || []) if (sw.flight) counts[sw.flight] = (counts[sw.flight] || 0) + 1;
   }
@@ -2235,14 +2305,14 @@ function flightPicker(rec, sw, i) {
 
 function renderRecordFilters() {
   const counts = {};
-  for (const rec of state.swings || []) counts[clubCat(rec.club)] = (counts[clubCat(rec.club)] || 0) + 1;
+  for (const rec of mySwingRecs() || []) counts[clubCat(rec.club)] = (counts[clubCat(rec.club)] || 0) + 1;
   const weakCounts = {};
-  for (const rec of state.swings || []) {
+  for (const rec of mySwingRecs() || []) {
     if (recFilter.cat !== 'all' && clubCat(rec.club) !== recFilter.cat) continue;
     for (const sw of rec.swings || []) for (const w of weakPoints(sw)) weakCounts[w] = (weakCounts[w] || 0) + 1;
   }
   const weaks = Object.entries(weakCounts).sort((a, b) => b[1] - a[1]);
-  const days = [...new Set((state.swings || []).map((r) => dayKey(recTime(r))))].sort().reverse();
+  const days = [...new Set(mySwingRecs().map((r) => dayKey(recTime(r))))].sort().reverse();
   const chip = (active, label, onclick) => el('button', { type: 'button', class: 'chip' + (active ? ' selected' : ''), onclick }, label);
   const set = (k, v) => () => { recFilter[k] = v; renderSwingRecords(); };
   const select = (label, key, options) => {
@@ -2308,7 +2378,7 @@ function renderSwingRow(rec, sw, i) {
         el('button', { type: 'button', class: 'btn small' + (sw.mark === 'bad' ? ' bad-btn' : ''), onclick: () => setMark(rec, i, 'bad'), 'aria-pressed': String(sw.mark === 'bad') }, '👎 悪い例'))),
     // 左の列: 動画と軌道。右の列: 弾道・コマ・計測・AI (動画が縦長でも右がその下に押し下げられないように)
     el('div', { class: 'swing-col-a' },
-      clipPlayer(sw, `${i + 1}球目の動画`),
+      clipPlayer(sw, `${i + 1}球目の動画`, rec),
       trailFigure(sw, i)),
     el('div', { class: 'swing-col-b' },
     flightPicker(rec, sw, i),
@@ -2320,7 +2390,9 @@ function renderSwingRow(rec, sw, i) {
     renderPose(sw),
     swingAiBox(rec, sw, i),
     el('div', { class: 'cand-btns' },
-      el('button', { type: 'button', class: 'btn small', onclick: () => compareWithModel(rec, i) }, 'お手本と比較'),
+      isIdeal(rec) ? null : el('button', { type: 'button', class: 'btn small', onclick: () => compareWithModel(rec, i) }, '理想・お手本と比べる'),
+      el('button', { type: 'button', class: 'btn small', onclick: () => setIdeal(rec, !isIdeal(rec)),
+        title: 'プロや先生の動画を、自分の点数に入れずにお手本として置いておく' }, isIdeal(rec) ? '理想のスイングから外す' : 'この動画を理想のスイングにする'),
       el('button', { type: 'button', class: 'btn small' + (sel ? ' selected-btn' : ''), onclick: () => toggleCompare(rec.id, i) },
         sel ? '比較に選択中' : '比較に選ぶ'),
       !rec._running
@@ -2360,18 +2432,60 @@ function swingCard(rec, i, withTime = false) {
   el('div', { class: 'swing-card-info' },
     el('div', { class: 'small strong' },
       withTime === 'day' ? `${fmtShort(swingTime(rec, sw))}` : withTime ? `${fmtHM(swingTime(rec, sw))} ${i + 1}球目` : `${i + 1}球目`,
-      sw.mark === 'good' ? ' 👍' : sw.mark === 'bad' ? ' 👎' : ''),
+      sw.mark === 'good' ? ' 👍' : sw.mark === 'bad' ? ' 👎' : '',
+      !isSeen(sw) ? el('span', { class: 'unseen-badge', title: 'まだ大きく開いて見ていない球' }, '未') : null),
     withTime === true ? el('div', { class: 'tiny muted' }, clubName(rec.club)) : null,
     el('div', { class: 'card-scores' },
       ms != null ? el('span', { class: `score-badge ${verdictOf(ms)}`, title: '姿勢の計測からの点数（AIなし）' }, `計測 ${ms}`) : null,
       sw.score != null ? el('span', { class: `score-badge ${sw.verdict || ''}`, title: 'AIの点数' }, `AI ${sw.score}`) : null,
       ms == null && sw.score == null ? el('span', { class: 'score-badge' + (sw.pose?.notSwing ? ' bad' : '') },
         sw.pose?.notSwing ? 'スイングなし？' : sw.pose?.error ? '測れず' : '未採点') : null),
-    sw.flight ? el('span', { class: 'flight-badge' }, FLIGHT_LABEL[sw.flight]) : null,
+    sw.flight ? el('span', { class: 'flight-badge' }, FLIGHT_LABEL[sw.flight])
+      : sw.ballAuto?.label && FLIGHT_LABEL[sw.ballAuto.label] ? el('span', { class: 'flight-badge auto', title: '動画から自動で読んだ弾道（試験版）' }, `${FLIGHT_LABEL[sw.ballAuto.label]}？`) : null,
     focusCheck(sw).length ? el('div', { class: 'tiny focus-line' }, ...focusCheck(sw).map((c) =>
       el('span', { class: c.ok ? 'focus-ok' : 'focus-ng' }, `${c.ok ? '✓' : '✗'} ${c.label}`))) : null,
     weak.length ? el('div', { class: 'tiny weak-text' }, `△ ${weak.slice(0, 2).join('・')}`) : null,
     sw.aiNote ? el('div', { class: 'tiny swing-card-note' }, sw.aiNote) : null));
+}
+
+
+// ---------- 理想のスイング (プロや先生のお手本動画)。自分の記録の点数・傾向・学習には入れない ----------
+function isIdeal(rec) { return !!rec?.ideal; }
+function mySwingRecs() { return (state.swings || []).filter((r) => !r.ideal); }
+function idealRecs() { return (state.swings || []).filter((r) => r.ideal); }
+function setIdeal(rec, on) {
+  rec.ideal = on;
+  save('swing', stripTransient(rec));
+  renderSwingRecords();
+  toast(on ? '理想のスイングにしました。自分の球を開いて「理想と比べる」で並べて見られます' : '自分の記録に戻しました');
+}
+function renderIdeal() {
+  const box = $('#ideal-swings');
+  if (!box) return;
+  const recs = idealRecs();
+  if (!recs.length) {
+    box.replaceChildren(el('details', { class: 'filter-more' },
+      el('summary', {}, '理想のスイング（お手本動画）を入れる'),
+      el('p', { class: 'small' }, 'プロや先生のスイングを後方から撮った動画を、ふつうに送って記録します。その球を押して大きく開き、下の「この動画を理想のスイングにする」を押すと、ここに並びます。',
+        '自分の点数・傾向・学習には入らず、自分の球を開いたときの「理想と比べる」で、コマと計測を並べて比べられます。')));
+    return;
+  }
+  const items = recs.flatMap((rec) => (rec.swings || []).map((sw, i) => ({ rec, i, sw })))
+    .sort((a, b) => clubOrder(a.rec.club) - clubOrder(b.rec.club));
+  box.replaceChildren(el('section', { class: 'day-group ideal-group' },
+    el('h3', { class: 'club-head' }, el('span', {}, '理想のスイング（お手本動画）'),
+      el('span', { class: 'stats' }, `${items.length}球・自分の点数には入りません`)),
+    el('div', { class: 'swing-cards wide-cards' }, items.map((x) => {
+      const card = swingCard(x.rec, x.i, true);
+      if (x.rec.concern) card.prepend(el('span', { class: 'rank top' }, x.rec.concern.slice(0, 12)));
+      return card;
+    })),
+    el('p', { class: 'muted tiny' }, '自分の球を開いて「理想・お手本と比べる」を押すと、同じクラブの理想と並べて見られます。'),
+    el('p', { class: 'small' }, `点数の目安を、理想のスイングに合わせて自動で補正しています（${calibrationSummary().join('・') || 'まだなし'}）。理想の球と同じくらいの動きは「良い」と判定します。理想を増やすほど合っていきます。`),
+    el('details', { class: 'small' }, el('summary', { class: 'muted' }, '理想のスイングを外す'),
+      ...recs.map((rec) => el('div', { class: 'row-between' },
+        el('span', {}, `${clubName(rec.club)} ${rec.concern || ''}（${rec.swings?.length || 0}球）`),
+        el('button', { type: 'button', class: 'btn small', onclick: () => setIdeal(rec, false) }, '自分の記録に戻す'))))));
 }
 
 // ---------- 1球を大きく見る画面 (前後の球へページ送りできる) ----------
@@ -2401,6 +2515,25 @@ function moveViewer(d) {
   renderViewer(true);
 }
 
+
+// ---------- 見たかどうか (大きく見る画面で開いた球は「見た」にする) ----------
+// 印や弾道を付けた球は、見たことにする
+function isSeen(sw) { return !!(sw.seenAt || sw.mark || sw.flight); }
+let seenChanged = false;
+function markSeen(rec, i) {
+  const sw = rec.swings[i];
+  if (!sw || sw.seenAt) return;
+  sw.seenAt = Date.now();
+  seenChanged = true;
+  save('swingSeen', { id: rec.id, clip: sw.clip || null, idx: i });
+}
+function markAllSeen(items) {
+  const recs = new Set();
+  for (const x of items) if (!x.sw.seenAt) { x.sw.seenAt = Date.now(); recs.add(x.rec); save('swingSeen', { id: x.rec.id, clip: x.sw.clip || null, idx: x.i }); }
+  
+  renderSwingRecords();
+}
+
 function closeViewer() {
   viewer = null;
   const box = overlay('swing-viewer', 'viewer');
@@ -2408,6 +2541,7 @@ function closeViewer() {
   box.hidden = true;
   box.replaceChildren();
   document.body.style.overflow = '';
+  if (seenChanged) { seenChanged = false; renderSwingRecords(); }
 }
 
 function renderViewer(toTop = false) {
@@ -2420,6 +2554,7 @@ function renderViewer(toTop = false) {
   viewer.pos = Math.min(viewer.pos, viewer.list.length - 1);
   const { rec, i } = viewer.list[viewer.pos];
   const sw = rec.swings[i];
+  markSeen(rec, i);
   const box = overlay('swing-viewer', 'viewer');
   const prevTop = box.hidden || toTop ? 0 : box.scrollTop;
   const n = viewer.list.length;
@@ -2557,6 +2692,7 @@ function renderRecord(rec, visibleIdx) {
             rec.swings.every((sw) => sw.pose && !sw.pose.error) ? '姿勢を測り直す' : '姿勢を測る')
           : null,
         el('button', { type: 'button', class: 'btn small', onclick: () => { rec._editTime = true; renderSwingRecords(); } }, '撮影日時を直す'),
+        el('button', { type: 'button', class: 'btn small', onclick: () => setIdeal(rec, !isIdeal(rec)) }, isIdeal(rec) ? '自分の記録に戻す' : '理想のスイングにする'),
         el('button', { type: 'button', class: 'btn small danger', onclick: () => deleteRecord(rec) }, '記録を削除')));
   }
   return el('div', { class: 'history-item', id: `rec-${rec.id}` }, head, strip, body);
@@ -2574,8 +2710,10 @@ function renderPoseAll() {
     $('#pose-all').replaceChildren(el('p', { class: 'muted small' }, poseAll.message));
     return;
   }
+  const outdated = all.filter((sw) => sw.pose?.items?.length && !sw.pose.error && config.poseVersion != null && sw.pose.v !== config.poseVersion).length;
   const status = [
     n ? `まだ測っていない記録 ${n}件` : '',
+    outdated ? `点数の基準が新しくなりました（付け直していない球 ${outdated}球）` : '',
     failed ? `測れなかった球 ${failed}球` : '',
     noLines ? `補助線がない球 ${noLines}球` : '',
     notSwing.length ? `スイングしていない球 ${notSwing.length}球` : '',
@@ -2585,6 +2723,8 @@ function renderPoseAll() {
     el('span', { class: 'cand-btns' },
       notSwing.length ? el('button', { type: 'button', class: 'btn small', onclick: () => { recFilter = { ...recFilter, rating: 'notswing', view: 'club' }; renderSwingRecords(); } }, 'スイングしていない球を見る') : null,
       notSwing.length ? el('button', { type: 'button', class: 'btn small danger', onclick: () => deleteNotSwings(notSwing) }, `${notSwing.length}球をまとめて削除`) : null,
+      outdated ? el('button', { type: 'button', class: 'btn small primary', onclick: () => measureAll(false), title: '新しい基準で測り直して、計測の点数を付け直します（AIは使いません）' },
+        `新しい基準で点数を付け直す（${outdated}球）`) : null,
       n || failed || noLines
         ? el('button', { type: 'button', class: 'btn small primary', onclick: () => measureAll(failed + noLines > 0), title: '姿勢を測ると計測点（AIなし）と補助線が付きます' },
           failed + noLines ? 'まとめて測る（測り直しも）' : 'まとめて測る')
@@ -2650,7 +2790,55 @@ async function resumePoseAll() {
   } catch { /* 古いサーバーなど。何もしない */ }
 }
 
+
+// ---------- 理想のスイングに合わせて、目安を自動で補正する ----------
+// 理想のスイング (同じ種類のクラブ) の計測値までは「良い」とみなす。判定を上げるだけで、下げることはしない
+const CAL_GROUP = { '1W': 'wood', '3W': 'wood', '5W': 'wood', UT: 'wood', PW: 'wedge', AW: 'wedge', SW: 'wedge', LW: 'wedge' };
+const CAL_KIND = { transition: 'low', back_smooth: 'low', hand_path: 'low', head_side: 'low', sway: 'low', head_down: 'low', spine: 'low', hip_line: 'low', lead_arm: 'high', tempo: 'range', address_tilt: 'range' };
+function calKey(it) {
+  if (it.key === 'head_up') return String(it.display || '').startsWith('下へ') ? 'head_down' : null; // 上へ (起き上がり) は補正しない
+  return CAL_KIND[it.key] ? it.key : null;
+}
+function calValue(it) { return it.key === 'hip_line' ? Math.max(0, Number(it.value) || 0) : Number(it.value); }
+function idealCalibration() {
+  const cal = {};
+  for (const rec of (state.swings || []).filter((r) => r.ideal)) {
+    const g = CAL_GROUP[rec.club] || 'iron';
+    for (const sw of rec.swings || []) for (const it of sw.pose?.items || []) {
+      const k = calKey(it);
+      if (!k || !Number.isFinite(calValue(it))) continue;
+      ((cal[g] ||= {})[k] ||= []).push(calValue(it));
+    }
+  }
+  return cal;
+}
+const GRADE_RANK = { '△': 0, '○': 1, '◎': 2 };
+function applyIdealCalibration() {
+  const cal = idealCalibration();
+  for (const rec of state.swings || []) {
+    const vals = cal[CAL_GROUP[rec.club] || 'iron'];
+    for (const sw of rec.swings || []) for (const it of sw.pose?.items || []) {
+      if (it.baseGrade == null) it.baseGrade = it.grade ?? null;
+      it.grade = it.baseGrade; it.calibrated = false;
+      const k = calKey(it); const vs = vals?.[k];
+      if (rec.ideal || !vs?.length || !(it.grade in GRADE_RANK)) continue;
+      const v = calValue(it);
+      let g = null;
+      if (CAL_KIND[k] === 'low') { const t = Math.max(...vs) * 1.15 + 0.5; g = v <= t ? '◎' : v <= t * 1.5 ? '○' : null; }
+      else if (CAL_KIND[k] === 'high') { const t = Math.min(...vs) * 0.97; g = v >= t ? '◎' : v >= t * 0.9 ? '○' : null; }
+      else { const d = k === 'tempo' ? 0.3 : 3; const lo = Math.min(...vs) - d; const hi = Math.max(...vs) + d; g = v >= lo && v <= hi ? '◎' : v >= lo - d && v <= hi + d ? '○' : null; }
+      if (g && GRADE_RANK[g] > GRADE_RANK[it.grade]) { it.grade = g; it.calibrated = true; }
+    }
+  }
+}
+function calibrationSummary() {
+  const cal = idealCalibration();
+  const names = { wood: 'ドライバー・ウッド', iron: 'アイアン', wedge: 'ウェッジ' };
+  return Object.keys(cal).map((g) => names[g]);
+}
+
 function renderSwingRecords() {
+  applyIdealCalibration();
   cardOrder = [];
   collectingCards = true;
   const y = window.scrollY; // 描き直しで一瞬ページが短くなっても、見ていた位置に戻す
@@ -2667,14 +2855,15 @@ function renderSwingRecordsInner() {
   renderCompare();
   renderPoseAll();
   renderRecordFilters();
-  const list = (state.swings || [])
+  renderIdeal();
+  const list = mySwingRecs()
     .filter((rec) => recFilter.cat === 'all' || clubCat(rec.club) === recFilter.cat)
     .filter((rec) => !recFilter.day || recFilter.day === 'all' || dayKey(recTime(rec)) === recFilter.day)
     .map((rec) => ({ rec, idx: (rec.swings || []).map((sw, i) => i).filter((i) => swingMatches(rec.swings[i])) }))
     .filter((x) => (recFilter.rating === 'all' && !recFilter.weak && !recFilter.flight) || x.idx.length)
     .sort((a, b) => recTime(b.rec) - recTime(a.rec));
   if (!list.length) {
-    $('#swing-records').replaceChildren(el('div', { class: 'empty' }, (state.swings || []).length
+    $('#swing-records').replaceChildren(el('div', { class: 'empty' }, mySwingRecs().length
       ? 'この条件に合う記録はありません。'
       : 'まだ記録がありません。動画を送って、スイングを記録しましょう。'));
     return;
@@ -2725,7 +2914,8 @@ function renderSwingRecordsInner() {
             : nested ? clubName(key.split('|')[1]) : fmtDayKey(key)),
           el('span', { class: 'stats' }, `${items.length}球`,
             avg != null ? [' ・ 平均 ', el('b', {}, `${avg}点`), ' ・ 最高 ', el('b', {}, `${Math.max(...scores)}点`)] : '',
-            focusSummary(items.map((x) => x.sw)))),
+            focusSummary(items.map((x) => x.sw)),
+            unseenSummary(items))),
         recFilter.view === 'day' ? focusDayLine(items.map((x) => x.sw)) : null,
         el('div', { class: 'swing-cards wide-cards' }, items.map((x, k) => {
           const card = swingCard(x.rec, x.i, recFilter.view === 'club' ? 'day' : recFilter.view === 'clubday' ? 'time' : true);
@@ -2807,7 +2997,7 @@ function initVideo() {
 
 // ---------- 分析タブ ----------
 function renderStatsGuide() {
-  const swings = (state.swings || []).flatMap((r) => r.swings || []);
+  const swings = mySwingRecs().flatMap((r) => r.swings || []);
   const measured = swings.filter((sw) => sw.pose?.items?.length).length;
   const shots = state.sessions.flatMap((s) => s.shots || []);
   const withDist = shots.filter((s) => s.distance != null).length;
@@ -2826,9 +3016,155 @@ function renderStatsGuide() {
   el('p', { class: 'muted tiny' }, '得意・苦手の傾向とコーチのメモは、練習タブにあります。'));
 }
 
+
+// ---------- 弾道と体の動き (再現性を上げるための分析) ----------
+// 弾道は自分で付けたものを優先し、なければ動画から自動で読んだ弾道を使う。4つのまとまりに分ける
+const FLIGHT_GROUPS = [
+  { id: 'good', label: 'まっすぐ系', sub: 'ストレート・ドロー・フェード', flights: ['straight', 'draw', 'fade'] },
+  { id: 'right', label: '右へのミス', sub: 'スライス・プッシュ', flights: ['slice', 'push'] },
+  { id: 'left', label: '左へのミス', sub: 'フック・引っかけ', flights: ['hook', 'pull'] },
+  { id: 'contact', label: '当たりのミス', sub: 'ダフリ・トップ・テンプラ', flights: ['fat', 'thin', 'sky'] },
+];
+const FA_ITEMS = ['tempo', 'head_side', 'head_up', 'sway', 'address_tilt', 'spine', 'hip_line', 'hand_path', 'transition', 'back_smooth', 'lead_arm'];
+let faView = { club: 'all', by: 'flight' };
+function flightOf(sw) { return sw.flight || sw.ballAuto?.label || null; }
+function flightGroupOf(sw) { const f = flightOf(sw); return FLIGHT_GROUPS.find((g) => g.flights.includes(f)) || null; }
+function faSwings() {
+  return mySwingRecs().filter((r) => faView.club === 'all' || (CAL_GROUP[r.club] || 'iron') === faView.club)
+    .flatMap((r) => (r.swings || []).map((sw) => ({ rec: r, sw, day: dayKey(swingTime(r, sw)) })));
+}
+// 項目ごとの「良さ」の平均 (◎100・○70・△35)
+function faProfile(list) {
+  const out = {};
+  for (const k of FA_ITEMS) {
+    const pts = list.map((x) => (x.sw.pose?.items || []).find((it) => it.key === k)).filter((it) => it && it.grade in GRADE_POINTS).map((it) => GRADE_POINTS[it.grade]);
+    if (pts.length) out[k] = { v: Math.round(pts.reduce((a, b) => a + b, 0) / pts.length), n: pts.length };
+  }
+  return out;
+}
+const FA_LABEL = { tempo: 'テンポ', head_side: '頭の横', head_up: '頭の上下', sway: '頭の横ぶれ', address_tilt: '前傾（構え）', spine: '前傾キープ', hip_line: 'お尻の位置', hand_path: '手元の通り道', transition: '切り返し', back_smooth: '上げのなめらかさ', lead_arm: '左腕' };
+function faBars(list) {
+  const days = [...new Set(list.map((x) => x.day))].sort().reverse().slice(0, 10);
+  const rows = days.map((d) => {
+    const ds = list.filter((x) => x.day === d && flightGroupOf(x.sw));
+    if (!ds.length) return null;
+    const segs = FLIGHT_GROUPS.map((g, i) => ({ g, i, n: ds.filter((x) => flightGroupOf(x.sw) === g).length })).filter((s) => s.n);
+    return el('div', { class: 'fa-bar-row' },
+      el('span', { class: 'fa-bar-day small' }, fmtDayKey(d).replace(/^\d+年/, '')),
+      el('div', { class: 'fa-bar', role: 'img', 'aria-label': segs.map((s) => `${s.g.label} ${s.n}球`).join('、') },
+        ...segs.map((s) => el('span', { class: `fa-seg s${s.i + 1}`, style: `flex-grow:${s.n}`, title: `${s.g.label}（${s.g.sub}）: ${s.n}球・${Math.round((s.n / ds.length) * 100)}%` },
+          s.n / ds.length >= 0.14 ? `${Math.round((s.n / ds.length) * 100)}%` : ''))),
+      el('span', { class: 'fa-bar-n muted small' }, `${ds.length}球`));
+  }).filter(Boolean);
+  if (!rows.length) return el('p', { class: 'muted small' }, '弾道の記録がまだありません。球を開いて弾道（ストレート・スライスなど）を押すか、後方から撮ると自動で読み取ります。');
+  return el('div', {},
+    el('div', { class: 'fa-legend small' }, ...FLIGHT_GROUPS.map((g, i) => el('span', { class: 'fa-key' }, el('span', { class: `fa-sw s${i + 1}` }), `${g.label}（${g.sub}）`))),
+    ...rows);
+}
+function faRadar(series) {
+  const keys = FA_ITEMS.filter((k) => series.some((s) => s.prof[k]));
+  if (keys.length < 3) return el('p', { class: 'muted small' }, '体の動きの計測がまだ少ないため、図にできません。動画タブで「まとめて測る」を押すと増えます。');
+  const W = 440, H = 330, cx = 220, cy = 165, R = 112;
+  const ang = (i) => -Math.PI / 2 + (i * 2 * Math.PI) / keys.length;
+  const pt = (i, v) => [cx + Math.cos(ang(i)) * R * (v / 100), cy + Math.sin(ang(i)) * R * (v / 100)];
+  const NS = 'http://www.w3.org/2000/svg';
+  const s = (tag, attrs, ...kids) => { const n = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); kids.forEach((c) => n.append(c)); return n; };
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'fa-radar', role: 'img', 'aria-label': '項目ごとの良さを多角形で重ねた図' });
+  for (const v of [35, 70, 100]) svg.append(s('polygon', { points: keys.map((_, i) => pt(i, v).join(',')).join(' '), class: 'fa-grid' }));
+  keys.forEach((k, i) => {
+    const [x, y] = pt(i, 100); svg.append(s('line', { x1: cx, y1: cy, x2: x, y2: y, class: 'fa-grid' }));
+    const [lx, ly] = pt(i, 122);
+    svg.append(s('text', { x: lx, y: ly, class: 'fa-axis', 'text-anchor': Math.abs(lx - cx) < 10 ? 'middle' : lx > cx ? 'start' : 'end', 'dominant-baseline': 'middle' }, FA_LABEL[k]));
+  });
+  [['35', '△'], ['70', '○'], ['100', '◎']].forEach(([v, g]) => { const [x, y] = pt(0, Number(v)); svg.append(s('text', { x: x + 4, y: y + 10, class: 'fa-ring' }, g)); });
+  series.forEach((ser, si) => {
+    const pts = keys.map((k, i) => (ser.prof[k] ? pt(i, ser.prof[k].v) : pt(i, 0)));
+    svg.append(s('polygon', { points: pts.map((p) => p.join(',')).join(' '), class: `fa-poly s${ser.slot}` }));
+    keys.forEach((k, i) => {
+      if (!ser.prof[k]) return;
+      const [x, y] = pts[i];
+      svg.append(s('circle', { cx: x, cy: y, r: 4, class: `fa-dot s${ser.slot}` }, s('title', {}, `${ser.label}・${FA_LABEL[k]}: ${ser.prof[k].v}（${ser.prof[k].n}球）`)));
+    });
+  });
+  return svg;
+}
+function faTable(series) {
+  const keys = FA_ITEMS.filter((k) => series.some((s) => s.prof[k]));
+  return el('details', { class: 'fa-table small' }, el('summary', {}, '数字で見る（◎100・○70・△35 の平均）'),
+    el('table', { class: 'focus-trend' },
+      el('thead', {}, el('tr', {}, el('th', {}, '項目'), ...series.map((s) => el('th', {}, `${s.label}（${s.n}球）`)))),
+      el('tbody', {}, keys.map((k) => el('tr', {}, el('td', {}, FA_LABEL[k]), ...series.map((s) => el('td', {}, s.prof[k] ? String(s.prof[k].v) : '—')))))));
+}
+// いちばん差が大きい項目をことばで出す
+function faInsight(series) {
+  if (series.length < 2) return null;
+  const [a, ...rest] = series;
+  const lines = rest.map((b) => {
+    const diffs = FA_ITEMS.filter((k) => a.prof[k] && b.prof[k]).map((k) => ({ k, d: a.prof[k].v - b.prof[k].v })).sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
+    const top = diffs.filter((x) => Math.abs(x.d) >= 10).slice(0, 2);
+    if (!top.length) return `${b.label}と${a.label}で、体の動きに大きな違いは見えません（ほかの原因かも: フェースの向き・アドレスの向きなど）。`;
+    return `${b.label}のときは、${a.label}と比べて ${top.map((x) => `「${FA_LABEL[x.k]}」が${x.d > 0 ? '悪い' : '良い'}（差 ${Math.abs(x.d)}）`).join('、')}。`;
+  });
+  return el('ul', { class: 'fa-insight small' }, lines.map((t) => el('li', {}, t)));
+}
+function faDayNotes(list) {
+  const all = faProfile(list);
+  const days = [...new Set(list.map((x) => x.day))].sort().reverse().slice(0, 5);
+  const rows = days.map((d) => {
+    const ds = list.filter((x) => x.day === d);
+    const prof = faProfile(ds);
+    const fl = ds.filter((x) => flightGroupOf(x.sw));
+    const good = fl.filter((x) => flightGroupOf(x.sw).id === 'good').length;
+    const diffs = Object.keys(prof).filter((k) => all[k]).map((k) => ({ k, d: prof[k].v - all[k].v })).sort((a, b) => a.d - b.d);
+    const worse = diffs.filter((x) => x.d <= -10).slice(0, 2).map((x) => FA_LABEL[x.k]);
+    const better = diffs.filter((x) => x.d >= 10).reverse().slice(0, 2).map((x) => FA_LABEL[x.k]);
+    if (!fl.length && !Object.keys(prof).length) return null;
+    return el('li', {}, el('span', { class: 'strong' }, fmtDayKey(d).replace(/^\d+年/, '')), ' ',
+      fl.length ? `まっすぐ系 ${Math.round((good / fl.length) * 100)}%（${fl.length}球） ` : '',
+      better.length ? el('span', { class: 'focus-ok' }, `良かった: ${better.join('・')} `) : '',
+      worse.length ? el('span', { class: 'focus-ng' }, `崩れた: ${worse.join('・')}`) : (!better.length ? el('span', { class: 'muted' }, 'いつもどおり') : ''));
+  }).filter(Boolean);
+  return rows.length ? el('ul', { class: 'fa-days small' }, rows) : null;
+}
+function renderFlightAnalysis() {
+  const box = document.getElementById('flight-analysis');
+  if (!box) return;
+  const list = faSwings();
+  const sel = (label, key, opts) => {
+    const n = el('select', { 'aria-label': label }, ...opts.map(([v, l]) => { const o = el('option', { value: v }, l); if (faView[key] === v) o.selected = true; return o; }));
+    n.addEventListener('change', () => { faView[key] = n.value; renderFlightAnalysis(); });
+    return el('label', {}, label, n);
+  };
+  let series;
+  if (faView.by === 'flight') {
+    series = FLIGHT_GROUPS.slice(0, 3).map((g, i) => { const xs = list.filter((x) => flightGroupOf(x.sw) === g); return { label: g.label, slot: i + 1, n: xs.length, prof: faProfile(xs) }; })
+      .filter((s) => s.n >= 2);
+  } else {
+    const days = [...new Set(list.filter((x) => x.sw.pose?.items?.length).map((x) => x.day))].sort().reverse().slice(0, 3);
+    series = days.map((d, i) => { const xs = list.filter((x) => x.day === d); return { label: fmtDayKey(d).replace(/^\d+年/, ''), slot: i + 1, n: xs.length, prof: faProfile(xs) }; });
+  }
+  box.replaceChildren(
+    el('div', { class: 'rec-toolbar' },
+      sel('クラブ', 'club', [['all', 'すべて'], ['wood', 'ドライバー・ウッド'], ['iron', 'アイアン'], ['wedge', 'ウェッジ']]),
+      sel('重ねる', 'by', [['flight', '弾道ごと'], ['day', '日ごと（最近の3日）']])),
+    el('h3', { class: 'fa-h' }, '日ごとの弾道の割合'),
+    faBars(list),
+    el('h3', { class: 'fa-h' }, faView.by === 'flight' ? '弾道ごとの体の動き（外側ほど良い）' : '日ごとの体の動き（外側ほど良い）'),
+    series.length
+      ? el('div', { class: 'fa-legend small' }, ...series.map((s) => el('span', { class: 'fa-key' }, el('span', { class: `fa-sw s${s.slot}` }), `${s.label}（${s.n}球）`)))
+      : el('p', { class: 'muted small' }, faView.by === 'flight' ? '弾道ごとに2球以上ずつ記録がたまると、ここに重ねて出ます。' : '計測できた日がまだありません。'),
+    series.length ? faRadar(series) : null,
+    faView.by === 'flight' ? faInsight(series) : null,
+    series.length ? faTable(series) : null,
+    el('h3', { class: 'fa-h' }, 'その日の特徴（いつもと比べて）'),
+    faDayNotes(list) || el('p', { class: 'muted small' }, 'まだ記録がありません。'),
+    el('p', { class: 'muted tiny' }, '良い球のときの形を「再現」できているかを見るための図です。まっすぐ系と比べて差の大きい項目が、ミスの原因の候補です。'));
+}
+
 function renderStats() {
   renderStatsGuide();
   renderTrend();
+  renderFlightAnalysis();
   const allShots = state.sessions.flatMap((s) => s.shots);
   $('#club-stats').replaceChildren(statsTable(summarizeShots(allShots)));
 
@@ -2893,7 +3229,9 @@ function renderSettings() {
   }, c.name)));
   $('#claude-cmd-input').value = config.claudeCmd || 'claude';
   $('#claude-model-input').value = config.claudeModel || 'sonnet';
-  $('#app-version').textContent = `アプリの版: ${APP_VERSION}（パソコンで動いている版: ${config.version ?? '古い版'}）`;
+  const upd = config.updatedAt ? `・${fmtDate(config.updatedAt)} 更新` : '';
+  $('#app-version').textContent = `アプリの版: ${APP_VERSION}（パソコンで動いている版: ${config.version ?? '古い版'}）${upd}`;
+  $('#app-badge').textContent = `版${config.version ?? APP_VERSION}${config.updatedAt ? `・${fmtDate(config.updatedAt).slice(5)}` : ''}`;
   $('#api-key-status').textContent = config.hasApiKey ? '設定済みです。変更するときだけ入力してください。' : 'まだ設定されていません。';
   $('#inbox-dir-input').value = config.inboxDir || '';
   $('#model-input').value = config.model || '';
@@ -3242,6 +3580,7 @@ function renderFeels() {
 }
 
 function renderAll() {
+  applyIdealCalibration();
   renderNotes();
   const memoBox = $('#note-memo');
   if (!memoBox.value && document.activeElement !== memoBox) loadNoteForm($('#note-day').value || todayKey());

@@ -337,14 +337,57 @@ def _grade(value, good, ok, higher_is_better=True):
 
 # アドレスの前傾角度 (後方から見た、腰→肩の線と縦の角度) の目安。番手が短いほど深く前かがみになる。
 # 一般的なレッスンの目安で、体格や構え方で変わる
+# 目安はプロのスイング (後方から撮ったドライバー) を測って合わせた。ドライバーやウッドは体の動きが大きいのが普通で、
+# アイアン、ウェッジと短くなるほど小さく収まるのが良い。(◎の上限, ○の上限)
+POSE_VERSION = 6  # 目安を変えたら上げる。古い版で測った球は、起動したときに測り直す
+CLUB_GROUP = {"1W": "wood", "3W": "wood", "5W": "wood", "UT": "wood",
+              "PW": "wedge", "AW": "wedge", "SW": "wedge", "LW": "wedge"}
+LIMITS = {
+    "wood": {"head_side": (6, 10), "head_down": (10, 14), "sway": (8, 12)},
+    "iron": {"head_side": (5, 8), "head_down": (8, 12), "sway": (6, 10)},
+    "wedge": {"head_side": (4, 7), "head_down": (6, 10), "sway": (5, 8)},
+}
+GROUP_NAME = {"wood": "ドライバー・ウッド", "iron": "アイアン", "wedge": "ウェッジ"}
+
 ADDRESS_TILT = {
-    "1W": (28, 38), "3W": (30, 40), "5W": (30, 40), "UT": (32, 40),
+    "1W": (24, 36), "3W": (27, 38), "5W": (28, 39), "UT": (32, 40),
     "4I": (33, 41), "5I": (33, 41), "6I": (34, 42), "7I": (35, 43), "8I": (36, 44), "9I": (36, 44),
     "PW": (38, 46), "AW": (38, 46), "SW": (39, 47), "LW": (39, 47),
 }
 
 
-def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=None):
+def hand_path_shift(hands, i_start, i_top, i_imp, ball_sign, cm_per_px, levels=12):
+    """手の高さごとに、バックスイングとダウンスイングで手の横の位置がどれだけ違うか (cm)。
+    戻り値は (ボール側へのずれの平均, 体側へのずれの平均)。測れなければ None。"""
+    if not (i_start < i_top < i_imp):
+        return None
+    back = hands[i_start:i_top + 1]
+    down = hands[i_top:i_imp + 1]
+    y_low = max(back[0, 1], down[-1, 1])
+    y_high = hands[i_top, 1]
+    if y_low - y_high < 20:
+        return None
+    out, inn = [], []
+    for y in np.linspace(y_high + (y_low - y_high) * 0.15, y_low - (y_low - y_high) * 0.1, levels):
+        def x_at(path):
+            ys = path[:, 1]
+            for j in range(len(ys) - 1):
+                if (ys[j] - y) * (ys[j + 1] - y) <= 0 and ys[j] != ys[j + 1]:
+                    f = (y - ys[j]) / (ys[j + 1] - ys[j])
+                    return path[j, 0] + f * (path[j + 1, 0] - path[j, 0])
+            return None
+        xb, xd = x_at(back), x_at(down)
+        if xb is None or xd is None:
+            continue
+        d = (xd - xb) * ball_sign * cm_per_px
+        (out if d > 0 else inn).append(abs(d))
+    n = len(out) + len(inn)
+    if n < levels // 2:
+        return None
+    return sum(out) / n, sum(inn) / n
+
+
+def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=None, refine=True):
     """関節位置から、スイングのタイミングと数値を出す。"""
     if lefty:
         order = [SWAP.get(i, i) for i in range(33)]
@@ -376,12 +419,16 @@ def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=N
             i_start = i
             break
     # インパクトの補正: 音は動画とずれることがある (スロー動画など) ので、
-    # 音の位置の 0.4 秒前〜0.15 秒後で、手がアドレスの位置にいちばん近づいたコマにする
+    # 音の位置の 0.4 秒前〜0.15 秒後で、手がアドレスの位置にいちばん近づいたコマにする。
+    # ただし、音 (または自分で止めた位置) のコマで手がもうアドレスの近くにあるなら、そのまま使う。
+    # 上手な人ほどインパクトでは手がアドレスより先にあり、「いちばん近いコマ」はインパクトの少し前になるため
     a = max(i_top + 3, i_imp - int(0.4 * fps))
     b = min(n - 1, i_imp + int(0.15 * fps))
-    if b > a:
+    if refine and b > a:  # 自分で合わせたインパクト (refine=False) はそのまま使う
         dist = np.linalg.norm(hands[a:b + 1] - hands[i_start], axis=1)
-        i_imp = a + int(np.argmin(dist))
+        here = float(np.linalg.norm(hands[i_imp] - hands[i_start])) if a <= i_imp <= b else 1e9
+        if not here <= 0.35 * torso:
+            i_imp = a + int(np.argmin(dist))
     impact_shift = (i_imp - int(min(n - 1, max(0, round(impact_t * fps))))) / fps
 
     # スイングしたかの確認: インパクトで手が低い位置にあり、トップでは手がそれより大きく上がっていること。
@@ -413,9 +460,9 @@ def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=N
     down_t = (i_imp - i_top) / fps
     if down_t > 0 and back_t > 0:
         ratio = back_t / down_t
-        g = "◎" if 2.5 <= ratio <= 3.5 else "○" if 2.0 <= ratio <= 4.0 else "△"
+        g = "◎" if 2.0 <= ratio <= 3.5 else "○" if 1.6 <= ratio <= 4.2 else "△"
         items.append({"key": "tempo", "label": "テンポ（バック：ダウン）", "value": round(ratio, 2),
-                      "display": f"{ratio:.1f} : 1（{back_t:.2f}秒 / {down_t:.2f}秒）", "grade": g, "hint": "目安 3 : 1"})
+                      "display": f"{ratio:.1f} : 1（{back_t:.2f}秒 / {down_t:.2f}秒）", "grade": g, "hint": "目安 2〜3.5 : 1"})
 
     dx = float(head[i_imp, 0] - head[i_start, 0]) * cm_per_px
     dy = float(head[i_imp, 1] - head[i_start, 1]) * cm_per_px
@@ -424,13 +471,20 @@ def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=N
         side_word = "ボール側へ" if dx * (1 if img[i_start, L_WRIST, 0] > head[i_start, 0] else -1) > 0 else "体の後ろ側へ"
     else:
         side_word = "目標側へ" if dx * target_sign > 0 else "目標と反対側へ"
+    group = CLUB_GROUP.get(club, "iron")
+    lim = LIMITS[group]
+    gname = GROUP_NAME[group]
     items.append({"key": "head_side", "label": "頭の横の動き（アドレス→インパクト）", "value": round(abs(dx), 1),
-                  "display": f"{side_word} {abs(dx):.0f}cm", "grade": _grade(abs(dx), 3, 6, False), "hint": "目安 3cm 以内"})
+                  "display": f"{side_word} {abs(dx):.0f}cm", "grade": _grade(abs(dx), *lim["head_side"], False),
+                  "hint": f"目安 {lim['head_side'][0]}cm 以内（{gname}）"})
+    # 頭が下がる (沈み込む) のはプロにも多いので広めに見る。上がる (起き上がり) は厳しく見る
+    head_grade = _grade(abs(dy), *lim["head_down"], False) if dy > 0 else _grade(abs(dy), 3, 6, False)
     items.append({"key": "head_up", "label": "頭の上下（アドレス→インパクト）", "value": round(abs(dy), 1),
-                  "display": f"{'下へ' if dy > 0 else '上へ'} {abs(dy):.0f}cm", "grade": _grade(abs(dy), 3, 6, False),
-                  "hint": "目安 3cm 以内（上へ動くのは起き上がり）"})
+                  "display": f"{'下へ' if dy > 0 else '上へ'} {abs(dy):.0f}cm", "grade": head_grade,
+                  "hint": f"目安 上へは 3cm 以内（起き上がり）・下へは {lim['head_down'][0]}cm 以内（{gname}）"})
     items.append({"key": "sway", "label": "バックスイング中の頭の横ぶれ", "value": round(sway, 1),
-                  "display": f"最大 {sway:.0f}cm", "grade": _grade(sway, 4, 8, False), "hint": "目安 4cm 以内"})
+                  "display": f"最大 {sway:.0f}cm", "grade": _grade(sway, *lim["sway"], False),
+                  "hint": f"目安 {lim['sway'][0]}cm 以内（{gname}）"})
 
     def tilt(i):
         v = mid_sh[i] - mid_hip[i]
@@ -457,6 +511,19 @@ def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=N
         word = (f"ボール側へ {hip_dx:.0f}cm（お尻が前に出ている）" if hip_dx > 4
                 else f"ボール側へ {hip_dx:.0f}cm（目安内）" if hip_dx >= 1.5
                 else f"後ろ側へ {-hip_dx:.0f}cm（お尻の位置をキープ）" if hip_dx <= -1.5 else "ほぼ動かず（お尻の位置をキープ）")
+        # 手元の通り道: 上げるときと下ろすときで、同じ高さのところの手の位置がどれだけずれたか (後方から)
+        # ボール側へずれる (アウトから下りる) のは大きく見て、体側へ (インから) は小さく見る
+        path = hand_path_shift(hands, i_start, i_top, i_imp, ball_sign, cm_per_px)
+        if path is not None:
+            out_cm, in_cm = path
+            # プロは体側へ (インから) 5〜7cm 下ろしていた。ボール側へ (アウトから) はスライスの元になりやすい
+            lim_p = {"wood": (4, 9), "iron": (4, 8), "wedge": (3, 7)}[group]
+            bad = out_cm + in_cm * 0.3
+            path_word = (f"ダウンで手元がボール側へ 平均{out_cm:.0f}cm（アウトから）" if out_cm >= in_cm and out_cm >= 2
+                         else f"ダウンで手元が体側へ 平均{in_cm:.0f}cm（インから）" if in_cm >= 2 else "上げ・下ろしがほぼ同じ通り道")
+            items.append({"key": "hand_path", "label": "手元の通り道（上げ→下ろし）", "value": round(bad, 1),
+                          "display": path_word, "grade": _grade(bad, *lim_p, False),
+                          "hint": f"目安 ずれ {lim_p[0]}cm 以内（{gname}）。同じ通り道で下ろせると再現性が上がる"})
         items.append({"key": "hip_line", "label": "お尻の位置（アドレス→インパクト）", "value": round(hip_dx, 1),
                       "display": word, "grade": _grade(fwd, 4, 8, False),
                       "hint": "目安 ボール側へ 4cm 以内（前に出るのは体の起き上がりのサイン）"})
@@ -475,9 +542,27 @@ def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=N
                           "display": f"約 {sh_turn - hip_turn:.0f}°", "grade": _grade(sh_turn - hip_turn, 35, 20),
                           "hint": "目安 35° 以上（推定）"})
 
+    # なめらかさ (力み): 切り返し直後から手元が急に速く動くのは「打ちにいっている」サイン。
+    # プロは切り返し直後はゆっくりで、インパクトに向かってだんだん速くなる。バックスイングも一定の速さで上がる
+    down = speed[i_top:i_imp + 1]
+    if len(down) >= 4 and down.max() > 0:
+        early = float(down[: max(1, len(down) // 3)].mean() / down.max())
+        word = "ゆっくり加速（なめらか）" if early <= 0.25 else "やや打ち急ぎ" if early <= 0.5 else "切り返しから打ちにいっている（力み）"
+        items.append({"key": "transition", "label": "切り返しのなめらかさ", "value": round(early, 2),
+                      "display": f"切り返し直後の手元の速さ 最大の{early * 100:.0f}%（{word}）", "grade": _grade(early, 0.25, 0.5, False),
+                      "hint": "目安 25% 以下（切り返しはゆっくり、インパクトに向かって加速）"})
+    back = speed[i_start:i_top + 1]
+    mid = back[len(back) // 4: 3 * len(back) // 4] if len(back) > 6 else back
+    if len(mid) >= 3 and mid.mean() > 0:
+        cv = float(mid.std() / mid.mean())
+        word = "なめらか" if cv <= 0.4 else "少しぎこちない" if cv <= 0.7 else "ぎくしゃく（力みやすい）"
+        items.append({"key": "back_smooth", "label": "バックスイングのなめらかさ", "value": round(cv, 2),
+                      "display": f"上げる速さのばらつき {cv * 100:.0f}%（{word}）", "grade": _grade(cv, 0.4, 0.7, False),
+                      "hint": "目安 40% 以下（一定の速さで上げる）"})
+
     arm = _angle(world[i_top, L_SHOULDER], world[i_top, L_ELBOW], world[i_top, L_WRIST])
     items.append({"key": "lead_arm", "label": f"{'右' if lefty else '左'}腕の伸び（トップ）", "value": round(arm),
-                  "display": f"{arm:.0f}°", "grade": _grade(arm, 160, 140), "hint": "目安 160° 以上（180° でまっすぐ）"})
+                  "display": f"{arm:.0f}°", "grade": _grade(arm, 150, 135), "hint": "目安 150° 以上（180° でまっすぐ。後方からの推定なので少し小さめに出ます）"})
 
     if face_on:
         def weight(i):
@@ -499,9 +584,34 @@ def measure(img, world, fps, impact_t, angle, height_cm=170, lefty=False, club=N
         "quality": round(vis, 2),
         "lefty": lefty,
         "impactShift": round(impact_shift, 3),  # 音から見つけたインパクトとのずれ (秒)
+        "v": POSE_VERSION,
         "view": "正面" if face_on else "後方",
         "note": "" if face_on else "肩・腰の回転と体重移動は、正面から撮った動画で測れます。",
     }
+
+
+PATH_BACK = (57, 135, 229)   # 上げ (青)
+PATH_DOWN = (235, 104, 52)   # 下ろし (オレンジ)
+
+
+def _draw_hand_path(d, hands, fr, with_down, h):
+    s, t, i = fr["start"], fr["top"], fr["impact"]
+    width = max(3, h // 160)
+
+    def poly(a, b, color):
+        pts = [tuple(map(float, hands[k])) for k in range(a, b + 1) if not np.isnan(hands[k, 0])]
+        if len(pts) >= 2:
+            d.line(pts, fill=(255, 255, 255, 150), width=width + 3, joint="curve")  # 縁取り (どんな背景でも見えるように)
+            d.line(pts, fill=color + (255,), width=width, joint="curve")
+    poly(s, t, PATH_BACK)
+    if with_down:
+        poly(t, i, PATH_DOWN)
+        f = video.font(max(12, h // 32))
+        y = h - max(12, h // 32) * 2 - 10
+        for n, (txt, color) in enumerate((("━ 上げ", PATH_BACK), ("━ 下ろし", PATH_DOWN))):
+            x = 8 + n * max(70, h // 6)
+            d.rectangle([x - 4, y - 2, x + max(64, h // 6.5), y + max(12, h // 32) + 4], fill=(0, 0, 0, 150))
+            d.text((x, y), txt, fill=color + (255,), font=f)
 
 
 def draw(frames, img, result, dst):
@@ -512,6 +622,7 @@ def draw(frames, img, result, dst):
     sheet = Image.new("RGB", (w * len(keys), h), (0, 0, 0))
     i0 = result["frames"]["start"]
     head0 = img[i0, NOSE, :2]
+    hands = _smooth((img[:, L_WRIST, :2] + img[:, R_WRIST, :2]) / 2)
     for j, (key, label) in enumerate(keys):
         i = result["frames"][key]
         panel = Image.fromarray(frames[i]).convert("RGBA")
@@ -530,6 +641,9 @@ def draw(frames, img, result, dst):
         if not np.isnan(p[NOSE, 0]):
             x, y = p[NOSE, :2]
             d.ellipse([x - 6, y - 6, x + 6, y + 6], outline=(255, 90, 90, 255), width=3)
+        # 手元の通り道: トップのコマに上げ (青)、インパクトのコマに上げ (青) と下ろし (オレンジ) を重ねる
+        if key in ("top", "impact"):
+            _draw_hand_path(d, hands, result["frames"], key == "impact", h)
         video.draw_label(d, (0, 0), label, max(14, h // 26), key)
         sheet.paste(Image.alpha_composite(panel, layer).convert("RGB"), (j * w, 0))
     sheet.save(dst, "JPEG", quality=85)
@@ -710,7 +824,7 @@ def retrail(clip_path, clip_offset, norm_full, dst, events=None):
 
 
 def analyze_clip(clip_path, impact_t, angle, models_dir, dst_image, height_cm=170, lefty=False,
-                 club=None, lines_video=None):
+                 club=None, lines_video=None, refine=True):
     """切り出した1球ぶんの動画を測り、結果と姿勢の画像を作る。"""
     duration, _, _ = video.probe(clip_path)
     # 人が小さく写っている動画 (前に保存した記録など) は、人のまわりを切り出してから測る
@@ -729,7 +843,7 @@ def analyze_clip(clip_path, impact_t, angle, models_dir, dst_image, height_cm=17
     w -= w % 2
     frames = video.decode_range(clip_path, 0, duration, w, h, crop)
     img, world = detect(frames, video.FPS, ensure_model(models_dir))
-    result = measure(img, world, video.FPS, impact_t, angle, height_cm, lefty, club)
+    result = measure(img, world, video.FPS, impact_t, angle, height_cm, lefty, club, refine)
     draw(frames, img, result, dst_image)
     # 補助線: 測った範囲 (切り出したなら切り出した範囲) と、元の切り出し動画全体の両方の座標で持つ
     norm = _fill(img)[:, :, :2] / np.array([w, h])

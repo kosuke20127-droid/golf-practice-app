@@ -27,7 +27,7 @@ STATIC_DIR = APP_DIR / "static"
 CONFIG_PATH = APP_DIR / "config.json"
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".3gp"}
 # 画面 (static/app.js) と同じ番号にする。違うと画面に「start.bat を起動し直して」と出る
-APP_VERSION = 32
+APP_VERSION = 44
 RESTART_CODE = 3  # launcher.py がこの番号で終わったのを見て、起動し直す
 MAX_AI_IMAGES = 20  # 1回の分析で送る画像の上限 (1球あたり3枚)
 
@@ -120,7 +120,7 @@ class Store:
                 if old is None:
                     raise ValueError("その記録はありません")
                 # 画像や動画の場所はサーバーが決めたものを使う
-                for k in ("memo", "concern", "text", "analyzedAt", "club", "angle"):
+                for k in ("memo", "concern", "text", "analyzedAt", "club", "angle", "ideal"):
                     if k in item:
                         old[k] = item[k]
             elif kind == "swingMark":
@@ -130,6 +130,12 @@ class Store:
                     raise ValueError("その記録はありません")
                 mark = item.get("mark")
                 rec["swings"][idx]["mark"] = mark if mark in ("good", "bad") else None
+            elif kind == "swingSeen":
+                rec = self.find_swing(item.get("id"))
+                i = self.find_swing_item(rec, item.get("clip")) if rec and item.get("clip") else int(item.get("idx", -1))
+                if rec is None or not 0 <= i < len(rec["swings"]):
+                    raise ValueError("その球は見つかりません")
+                rec["swings"][i]["seenAt"] = int(time.time() * 1000)
             elif kind == "swingFlight":
                 rec = self.find_swing(item.get("id"))
                 i = self.find_swing_item(rec, item.get("clip")) if rec else -1
@@ -489,7 +495,7 @@ def measure_swing(rec_id, idx, sw, angle, club=None):
         lines_clip = MEDIA_DIR / str(rec_id) / f"{stem}_lines.mp4"
         result = pose.analyze_clip(DATA_DIR / sw["clip"], float(sw.get("clipOffset") or 2.5), angle,
                                    DATA_DIR / "models", dst, float(CONFIG.get("height_cm") or 170),
-                                   bool(CONFIG.get("lefty")), club, lines_clip)
+                                   bool(CONFIG.get("lefty")), club, lines_clip, refine=not sw.get("manualImpact"))
         result.pop("frames", None)
         norm_full, refs_full = result.pop("_norm_full"), result.pop("_refs_full")
         # アドレスの腰・手・足首の位置 (元の動画に対する割合)。弾道の推定でボールの場所を探すのに使う
@@ -558,6 +564,61 @@ def run_pose(rec_id):
         entry.update(status="error", message=f"測れませんでした: {e}")
 
 
+def pose_version():
+    try:
+        import pose
+        return pose.POSE_VERSION
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def fix_impact(rec_id, clip, at):
+    """保存した球のインパクトの位置を直す。切り出し動画の中の位置 at (秒) をインパクトにして、
+    コマ画像・軌道画像・切り出し動画を作り直し、姿勢を測り直す (自分で合わせた位置なので、体の動きから動かさない)。"""
+    rec = STORE.find_swing(rec_id)
+    i = STORE.find_swing_item(rec, clip) if rec else -1
+    if i < 0:
+        raise ValueError("その球は見つかりません")
+    sw = rec["swings"][i]
+    src = DATA_DIR / sw["clip"]
+    duration, _, _ = video.probe(src)
+    at = min(max(0.3, float(at)), duration - 0.1)
+    old_files = [sw.get(k) for k in ("sprite", "trail", "clip")]
+    prefix = f"{Path(sw['clip']).stem.split('_r')[0]}_r{int(time.time())}"
+    out = MEDIA_DIR / str(rec_id)
+    media = video.make_swing_media(src, at, duration, out, prefix)
+    delta = at - float(sw.get("clipOffset") or 2.5)
+    new = dict(sw)
+    new.update(sprite=f"media/{rec_id}/{media['sprite']}", trail=f"media/{rec_id}/{media['trail']}",
+               clip=f"media/{rec_id}/{media['clip']}", clipOffset=media["clipOffset"], aspect=media["aspect"],
+               t=float(sw.get("t") or 0) + delta, manualImpact=True, crop=None)
+    if sw.get("shotAt"):
+        new["shotAt"] = int(sw["shotAt"] + delta * 1000)
+    new.pop("viewCrop", None)
+    new["pose"] = measure_swing(rec_id, i, new, rec.get("angle"), rec.get("club"))
+    with STORE.lock:
+        rec2 = STORE.find_swing(rec_id)
+        j = STORE.find_swing_item(rec2, clip) if rec2 else -1
+        if j < 0:
+            raise ValueError("その球は見つかりません")
+        rec2["swings"][j] = new
+        STORE._write()
+    for f in old_files:  # 前の画像と動画は消す
+        if f:
+            try:
+                (DATA_DIR / f.split("?")[0]).unlink(missing_ok=True)
+            except OSError:
+                pass
+    return new
+
+
+def pose_outdated(sw):
+    """前の版の目安で測った球 (点数の付け方を変えたら、測り直して新しい目安で付け直す)。"""
+    import pose
+    p = sw.get("pose") or {}
+    return bool(p.get("items")) and not p.get("error") and p.get("v") != pose.POSE_VERSION
+
+
 def run_pose_all(retry_failed=False, everything=False):
     """まだ姿勢を測っていない記録を、古いものからまとめて測る。
 
@@ -570,7 +631,7 @@ def run_pose_all(retry_failed=False, everything=False):
         p = sw.get("pose") or {}
         if everything:
             return True
-        return "pose" not in sw or (retry_failed and (p.get("error") or not p.get("linesClip")))
+        return "pose" not in sw or pose_outdated(sw) or (retry_failed and (p.get("error") or not p.get("linesClip")))
     try:
         targets = [r["id"] for r in STORE.snapshot()["swings"]
                    if any(todo(sw) for sw in r.get("swings") or [])]
@@ -616,6 +677,8 @@ def run_save(job, form):
         rec_id = str(int(time.time() * 1000))
         out = MEDIA_DIR / rec_id
         out.mkdir(parents=True, exist_ok=True)
+        manual_list = form.get("manual") or []
+        manual_at = {round(float(t), 3) for t, m in zip(form["impacts"], manual_list) if m}
         impacts = sorted(float(t) for t in form["impacts"])
         shot_at = int(form.get("shotAt") or job.shot_at or time.time() * 1000)
         done = [0]
@@ -634,6 +697,8 @@ def run_save(job, form):
                 "clipOffset": media["clipOffset"],
                 "shotAt": shot_at + int(t * 1000),
                 "score": None, "verdict": None, "aiNote": "", "mark": None,
+                # 自分でインパクトを合わせた球は、体の動きから位置を直さない
+                "manualImpact": round(t, 3) in manual_at,
             }
             sw["pose"] = measure_swing(rec_id, i, sw, form.get("angle"), form.get("club"))
             shift = sw["pose"].get("impactShift") or 0
@@ -811,8 +876,8 @@ def run_learn():
 
 
 # 本人が選んだ苦手 (pc/static/app.js の FOCUS_OPTIONS と同じ)
-FOCUS_LABELS = {"rise": "体が起きる", "hip": "お尻が前に出る", "head": "頭が動く", "arm": "左腕が曲がる",
-                "tempo": "打ち急ぐ（テンポ）", "setup": "アドレスの前傾が浅い・深い", "finish": "フィニッシュで体重が残る"}
+FOCUS_LABELS = {"rise": "体が起きる", "hip": "お尻が前に出る", "head": "頭が動く", "arm": "左腕が曲がる", "path": "アウトから下りる（手元の通り道）",
+                "tempo": "打ち急ぐ（テンポ）", "tense": "力む（切り返しで打ちにいく）", "setup": "アドレスの前傾が浅い・深い", "finish": "フィニッシュで体重が残る"}
 
 
 def focus_text(st=None):
@@ -1084,6 +1149,8 @@ class Handler(BaseHTTPRequestHandler):
                 "claudeCmd": CONFIG.get("claude_cmd") or "claude",
                 "claudeModel": CONFIG.get("claude_model") or "sonnet",
                 "version": APP_VERSION,
+                "updatedAt": app_updated_at(),
+                "poseVersion": pose_version(),
                 "hasGithubToken": update_token_ok(),
                 "publicUpdates": updater.PUBLIC,
                 "coachEngine": coach_engine(),
@@ -1257,6 +1324,12 @@ class Handler(BaseHTTPRequestHandler):
                 COACH.update(status="running", message=f"{name} が記録を読んでいます…（1〜3分ほど）")
                 threading.Thread(target=run_learn, daemon=True).start()
             return self.send_json({"ok": True})
+        m = re.fullmatch(r"/api/swings/(\w+)/impact", path)
+        if m:
+            try:
+                return self.send_json({"swing": fix_impact(m.group(1), body.get("clip"), body.get("at"))})
+            except ValueError as e:
+                return self.send_error_json(404, str(e))
         m = re.fullmatch(r"/api/swings/(\w+)/viewcrop", path)
         if m:
             return self.send_json({"crop": view_crop(m.group(1), body.get("clip"))})
@@ -1317,6 +1390,15 @@ def list_inbox():
     return sorted(files, key=lambda x: -x["mtime"])
 
 
+def app_updated_at():
+    """このアプリを最後に入れ替えた時刻 (プログラムのファイルのいちばん新しい更新時刻、ミリ秒)。"""
+    files = list(APP_DIR.glob("*.py")) + list(STATIC_DIR.glob("*"))
+    try:
+        return int(max(f.stat().st_mtime for f in files if f.is_file()) * 1000)
+    except ValueError:
+        return None
+
+
 def update_token_ok():
     """更新を確かめられるか (配布版は公開リポジトリなのでトークンは要らない)。"""
     return updater.PUBLIC or bool(CONFIG.get("github_token"))
@@ -1356,9 +1438,9 @@ def main():
     STORE = Store(DATA_DIR / "db.json")
     POSE_PROBLEM = pose_problem()
     # まだ姿勢を測っていない記録があれば、起動したら裏で測っておく (AIは使わない)
-    if not POSE_PROBLEM and any(any("pose" not in sw for sw in r.get("swings") or [])
+    if not POSE_PROBLEM and any(any("pose" not in sw or pose_outdated(sw) for sw in r.get("swings") or [])
                                 for r in STORE.snapshot()["swings"]):
-        POSES["_all"] = {"status": "running", "message": "まだ測っていない記録の姿勢を測っています…"}
+        POSES["_all"] = {"status": "running", "message": "まだ測っていない記録と、新しい目安で測り直す記録の姿勢を測っています…"}
         threading.Thread(target=run_pose_all, daemon=True).start()
     host, port = CONFIG["host"], int(CONFIG["port"])
     httpd = ThreadingHTTPServer((host, port), Handler)

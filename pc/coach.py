@@ -18,8 +18,8 @@ FLIGHT_NAMES = {"straight": "ストレート", "fade": "フェード", "draw": "
                 "push": "プッシュ", "pull": "引っかけ", "fat": "ダフリ", "thin": "トップ", "sky": "テンプラ"}  # 読ませる球数の上限 (新しいものから)
 
 
-FOCUS_LABELS = {"rise": "体が起きる", "hip": "お尻が前に出る", "head": "頭が動く", "arm": "左腕が曲がる",
-                "tempo": "打ち急ぐ（テンポ）", "setup": "アドレスの前傾が浅い・深い", "finish": "フィニッシュで体重が残る"}
+FOCUS_LABELS = {"rise": "体が起きる", "hip": "お尻が前に出る", "head": "頭が動く", "arm": "左腕が曲がる", "path": "アウトから下りる（手元の通り道）",
+                "tempo": "打ち急ぐ（テンポ）", "tense": "力む（切り返しで打ちにいく）", "setup": "アドレスの前傾が浅い・深い", "finish": "フィニッシュで体重が残る"}
 
 
 class CoachError(Exception):
@@ -38,7 +38,7 @@ def _pose_text(sw):
 def build_input(state, club_names):
     """記録を、Claude に読ませる文章にする (画像は送らない)。"""
     lines = []
-    swings = sorted(state.get("swings") or [], key=lambda r: r.get("shotAt") or r.get("at") or 0, reverse=True)
+    swings = sorted([r for r in state.get("swings") or [] if not r.get("ideal")], key=lambda r: r.get("shotAt") or r.get("at") or 0, reverse=True)
     count = 0
     lines.append("## スイング動画の記録（新しい順）")
     for rec in swings:
