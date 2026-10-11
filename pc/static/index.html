@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f7a4d">
+  <title>ゴルフ練習ノート</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>⛳ ゴルフ練習ノート</h1>
+  </header>
+
+  <div id="update-banner" class="update-banner" hidden>
+    <span id="update-msg"></span>
+    <button type="button" id="btn-update-now" class="btn small">更新する</button>
+  </div>
+  <div id="offline" class="offline" hidden>
+    <span id="offline-msg"></span>
+    <button type="button" id="btn-retry" class="btn small">再接続</button>
+  </div>
+
+  <main>
+    <!-- 打球記録 -->
+    <section id="tab-practice" class="tab active">
+      <div id="session-idle" class="card">
+        <h2>練習</h2>
+        <div id="theme-box-idle" class="theme-box"></div>
+        <button id="btn-start" class="btn primary block big-btn">練習を始める</button>
+        <details class="fold">
+          <summary class="muted small">場所・メモを追加</summary>
+          <label class="field">場所・メモ
+            <input id="session-place" type="text" placeholder="例: 〇〇打ちっぱなし">
+          </label>
+        </details>
+      </div>
+
+      <div id="session-active" hidden>
+        <div class="card session-bar">
+          <div>
+            <div class="muted small">練習中</div>
+            <div id="session-info" class="strong"></div>
+          </div>
+          <button id="btn-end" class="btn danger">終了</button>
+        </div>
+
+        <div class="card">
+          <div id="theme-box-active" class="theme-box compact"></div>
+          <details id="feel-quick" class="fold" hidden>
+            <summary class="small">感覚ノートを見る</summary>
+            <div id="feel-quick-list"></div>
+          </details>
+          <div class="field">クラブ
+            <div id="club-picker" class="chips"></div>
+          </div>
+          <div class="field">今の当たりの感触は？<span class="muted small">（タップで1球保存）</span>
+            <div class="feel-grid">
+              <button type="button" class="btn feel-btn good" data-feel="good">いい感触</button>
+              <button type="button" class="btn feel-btn meh" data-feel="meh">いまいち</button>
+              <button type="button" class="btn feel-btn" data-feel="unknown">わからない</button>
+              <button type="button" class="btn feel-btn" data-feel="">記録だけ</button>
+            </div>
+          </div>
+          <details id="shot-details" class="fold">
+            <summary class="small">詳しく記録（距離・方向・当たり）</summary>
+            <p class="muted tiny">入れたい球だけ選んでください。選んだ内容は、次に感触ボタンを押したときに一緒に保存されます。</p>
+            <label class="field">キャリー (ヤード・空欄でOK)
+              <div class="stepper">
+                <button type="button" class="btn" data-step="-5">−5</button>
+                <input id="shot-distance" type="number" inputmode="numeric" min="0" max="400">
+                <button type="button" class="btn" data-step="5">+5</button>
+              </div>
+            </label>
+            <div class="field">方向
+              <div class="chips" id="dir-picker">
+                <button type="button" class="chip" data-value="left">← 左</button>
+                <button type="button" class="chip" data-value="center">まっすぐ</button>
+                <button type="button" class="chip" data-value="right">右 →</button>
+                <button type="button" class="chip" data-value="unknown">わからない</button>
+              </div>
+            </div>
+            <div class="field">当たり
+              <div class="chips" id="contact-picker">
+                <button type="button" class="chip" data-value="good">ナイス</button>
+                <button type="button" class="chip" data-value="fat">ダフリ</button>
+                <button type="button" class="chip" data-value="thin">トップ</button>
+                <button type="button" class="chip" data-value="toe">先・ヒール</button>
+                <button type="button" class="chip" data-value="unknown">わからない</button>
+              </div>
+            </div>
+          </details>
+          <div class="last-shot">
+            <span id="last-shot" class="small muted">まだ記録していません</span>
+            <button id="btn-undo" class="btn small">取り消す</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>この練習</h2>
+          <div id="session-summary"></div>
+        </div>
+      </div>
+
+      <div id="feel-card" class="card">
+        <h2>感覚ノート（つかんだ感覚）</h2>
+        <p class="muted small">うまくいったときの「〇〇な感じ」「〇〇のイメージ」を、何に効くかと一緒に残します。コースや練習で迷ったときに見返せます。振り返りノートをAIで整理すると、メモから自動で拾います。</p>
+        <div id="feel-list"></div>
+        <details class="fold">
+          <summary class="small">自分で書き足す</summary>
+          <label class="field">感覚・イメージ（自分の言葉で）
+            <input id="feel-phrase" type="text" placeholder="例: 右ひじを脇腹につけたまま回る感じ">
+          </label>
+          <label class="field">何に効く？どんなときに使う？
+            <input id="feel-fixes" type="text" placeholder="例: スライスが出るとき。アイアンのダウンスイング">
+          </label>
+          <button type="button" id="btn-feel-add" class="btn block">追加</button>
+        </details>
+      </div>
+
+      <div id="tendency-card" class="card">
+        <h2>あなたの傾向</h2>
+        <div id="tendency"></div>
+      </div>
+
+      <div id="coach-card" class="card">
+        <h2>コーチのメモ（記録から学習）</h2>
+        <div id="coach"></div>
+      </div>
+
+      <div class="note-area">
+        <div class="card" id="note-card">
+          <h2>振り返りノート</h2>
+          <label class="field">日付
+            <input id="note-day" type="date">
+          </label>
+          <label class="field">メモ（走り書きでOK）
+            <textarea id="note-memo" class="note-memo" rows="5" placeholder="例: 7番 右に出る球多い。後半は手元を低く意識したらまっすぐ出た。ドライバーは振り遅れ気味"></textarea>
+          </label>
+          <div id="note-videos" class="muted small"></div>
+          <div class="grid2">
+            <button type="button" id="btn-note-save" class="btn">メモだけ保存</button>
+            <button type="button" id="btn-note-ai" class="btn primary">AIで整理して保存</button>
+          </div>
+          <p id="note-status" class="muted small"></p>
+        </div>
+        <div class="card">
+          <h2>これまでのノート</h2>
+          <div id="note-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ドリル -->
+    <section id="tab-drills" class="tab">
+      <div id="drill-list"></div>
+      <div id="drill-run" class="card" hidden>
+        <div class="row-between">
+          <h2 id="drill-title"></h2>
+          <button id="btn-drill-close" class="btn small">戻る</button>
+        </div>
+        <p id="drill-desc" class="muted"></p>
+        <div class="counter">
+          <div><div class="big" id="drill-made">0</div><div class="muted small">成功</div></div>
+          <div class="slash">/</div>
+          <div><div class="big" id="drill-total">0</div><div class="muted small">回数</div></div>
+        </div>
+        <div class="progress"><div id="drill-progress"></div></div>
+        <div class="grid2">
+          <button id="btn-drill-miss" class="btn danger big-btn">✕ 失敗</button>
+          <button id="btn-drill-make" class="btn primary big-btn">◯ 成功</button>
+        </div>
+        <button id="btn-drill-save" class="btn block">結果を保存</button>
+        <p id="drill-best" class="muted small center"></p>
+      </div>
+    </section>
+
+    <!-- 動画分析 -->
+    <section id="tab-video" class="tab">
+      <div class="col-left">
+      <div class="card drop-zone" id="video-drop">
+        <h2>スイング動画</h2>
+        <div class="stack">
+          <label class="btn primary block file-btn">動画を送る
+            <input id="video-file" type="file" accept="video/*" hidden>
+          </label>
+          <button type="button" id="btn-inbox" class="btn block">パソコンのフォルダから選ぶ</button>
+        </div>
+        <p class="muted small">スマホからは撮った動画を送ります。長い動画は、パソコンの取り込みフォルダに入れて「フォルダから選ぶ」がおすすめです（送る時間がかかりません）。</p>
+        <div id="inbox-panel" class="drive-panel" hidden>
+          <div class="row-between">
+            <span class="small strong">取り込みフォルダの動画</span>
+            <span class="cand-btns">
+              <button type="button" id="btn-inbox-refresh" class="btn small">更新</button>
+              <button type="button" id="btn-inbox-close" class="btn small">閉じる</button>
+            </span>
+          </div>
+          <div id="inbox-dir" class="muted small path"></div>
+          <div id="inbox-status" class="muted small"></div>
+          <div id="inbox-list" class="drive-list"></div>
+        </div>
+      </div>
+
+      <div id="video-panel" hidden>
+        <div class="card video-card">
+          <div class="row-between">
+            <span id="job-name" class="small strong path"></span>
+            <button type="button" id="btn-job-cancel" class="btn small">やめる</button>
+          </div>
+          <div id="video-loading" class="muted small">再生用の動画を準備しています…（スイングの候補は先に表示されます）</div>
+          <video id="video" playsinline muted preload="auto"></video>
+          <input id="video-seek" type="range" min="0" max="1000" value="0" aria-label="再生位置">
+          <div class="video-time"><span id="video-cur">0.00</span> / <span id="video-dur">0.00</span> 秒</div>
+          <div class="video-controls">
+            <button type="button" class="btn" id="btn-frame-back" aria-label="1コマ戻る">◀︎ コマ</button>
+            <button type="button" class="btn primary" id="btn-play">▶︎ 再生</button>
+            <button type="button" class="btn" id="btn-frame-fwd" aria-label="1コマ進む">コマ ▶︎</button>
+          </div>
+          <div class="chips" id="speed-picker">
+            <button type="button" class="chip" data-value="0.1">0.1倍</button>
+            <button type="button" class="chip selected" data-value="0.25">0.25倍</button>
+            <button type="button" class="chip" data-value="0.5">0.5倍</button>
+            <button type="button" class="chip" data-value="1">等速</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="row-between">
+            <h2>見つかったスイング</h2>
+            <span class="muted small" id="candidate-count"></span>
+          </div>
+          <div id="dup-warning" class="dup-warning" hidden></div>
+          <div id="detect-status" class="muted small"></div>
+          <div id="swing-candidates" class="candidates"></div>
+          <button type="button" class="btn block" id="btn-add-here">今の位置を追加</button>
+          <p class="muted small">隣の打席の音など、スイングしていない音は自動で外しています。足りない球があれば、下の「スイングではなさそうな音」から戻すか、インパクトの瞬間で止めて「今の位置を追加」を押します。</p>
+        </div>
+
+        <div class="card">
+          <h2>記録する</h2>
+          <div class="field">クラブ
+            <div id="video-club-picker" class="chips"></div>
+            <div id="club-guess" class="muted small club-guess"></div>
+          </div>
+          <div class="field">撮影の向き
+            <div class="chips" id="angle-picker">
+              <button type="button" class="chip selected" data-value="正面">正面</button>
+              <button type="button" class="chip" data-value="後方">後方</button>
+              <button type="button" class="chip" data-value="不明">わからない</button>
+            </div>
+          </div>
+          <label class="field">悩み・意識したこと（任意）
+            <input id="video-concern" type="text" placeholder="例: スライスする、ダフる">
+          </label>
+          <label class="field">メモ（任意）
+            <input id="video-memo" type="text" placeholder="例: 〇〇練習場、手首を意識">
+          </label>
+          <label class="field">撮影日時
+            <input id="shot-time" type="datetime-local">
+          </label>
+          <p id="shot-source" class="muted small shot-source"></p>
+          <div class="stack">
+            <button id="btn-save-analyze" class="btn primary block">記録してAIに分析してもらう</button>
+            <button id="btn-save-only" class="btn block">記録だけ保存</button>
+          </div>
+          <div id="save-status" class="muted small"></div>
+        </div>
+      </div>
+      </div>
+      <div class="col-right">
+      <div id="compare-card" class="card" hidden>
+        <div class="row-between">
+          <h2>スイング比較</h2>
+          <button id="btn-compare-clear" class="btn small">選び直す</button>
+        </div>
+        <div id="compare-body"></div>
+      </div>
+
+      <div class="card">
+        <h2>スイング記録</h2>
+        <div id="pose-all" class="pose-all"></div>
+        <div id="record-filters" class="record-filters"></div>
+        <div id="swing-records"></div>
+      </div>
+      </div>
+    </section>
+
+    <!-- 分析 -->
+    <section id="tab-stats" class="tab">
+      <div class="card wide">
+        <h2>分析タブでわかること</h2>
+        <div id="stats-guide"></div>
+      </div>
+      <div class="card wide">
+        <h2>スイングの点数・数値の推移</h2>
+        <div id="trend"></div>
+      </div>
+      <div class="card">
+        <h2>クラブ別の飛距離</h2>
+        <p class="muted small">練習中に「詳しく記録」でキャリーを入れた球だけで集計します（当たりが「ナイス」か未入力の球）。</p>
+        <div id="club-stats"></div>
+      </div>
+      <div class="card">
+        <h2>ドリル成績</h2>
+        <div id="drill-stats"></div>
+      </div>
+      <div class="card wide">
+        <h2>練習履歴</h2>
+        <div id="history"></div>
+      </div>
+    </section>
+
+    <!-- 設定 -->
+    <section id="tab-settings" class="tab">
+      <div class="card">
+        <h2>マイバッグ</h2>
+        <p class="muted small">練習で使うクラブを選んでください</p>
+        <div id="bag-editor" class="chips"></div>
+      </div>
+      <div class="card">
+        <h2>体の計測</h2>
+        <p class="muted small">動画から体の動きを測るときに使います（頭の動きの cm 換算など）。</p>
+        <label class="field">身長（cm）
+          <input id="height-input" type="number" inputmode="numeric" min="100" max="230">
+        </label>
+        <label class="check-row"><input id="lefty-input" type="checkbox"> 左打ち</label>
+        <button id="btn-body" class="btn block">保存</button>
+      </div>
+      <div class="card">
+        <h2>AI 分析（Gemini）</h2>
+        <p class="muted small">Google の Gemini API キーを入れると、AI 分析が使えます。キーは <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> で無料で作れます。キーはこのパソコンの中にだけ保存されます。</p>
+        <label class="field">API キー
+          <input id="api-key-input" type="password" autocomplete="off" placeholder="AIza...">
+        </label>
+        <button id="btn-api-key" class="btn block">キーを保存</button>
+        <p id="api-key-status" class="muted small"></p>
+        <label class="field">モデル名（ふつうは空欄のままで OK）
+          <input id="model-input" type="text" autocomplete="off" placeholder="gemini-flash-latest">
+        </label>
+        <button id="btn-model" class="btn block">モデル名を保存</button>
+      </div>
+      <div class="card">
+        <h2>スマホから使う</h2>
+        <p class="muted small">オンにすると、同じ Wi-Fi につないだスマホから、このパソコンのアプリを開けます（家の Wi-Fi で使ってください）。
+          はじめてオンにしたとき、Windows に「アクセスを許可しますか」と聞かれたら「許可」を押してください。</p>
+        <label class="check-row"><input id="lan-input" type="checkbox"> 同じ Wi-Fi のスマホから使う</label>
+        <p id="lan-url" class="small"></p>
+      </div>
+
+      <div class="card" id="update-card">
+        <h2>アプリの更新</h2>
+        <p class="muted small">GitHub の読み取り専用トークンを一度入れておくと、新しい版が出たときにボタン1つで更新・起動し直しできます（data の記録はそのままです）。</p>
+        <label class="field">GitHub のトークン
+          <input id="github-token-input" type="password" autocomplete="off" placeholder="github_pat_…">
+        </label>
+        <button id="btn-github-token" class="btn block">トークンを保存</button>
+        <div id="update-status" class="small"></div>
+        <details class="small">
+          <summary>トークンの作り方</summary>
+          <ol class="small">
+            <li>GitHub にログインして、右上のアイコン → Settings → 左の一番下 Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</li>
+            <li>Token name は「golf更新」など。Expiration は 1年（期限が切れたら作り直し）</li>
+            <li>Repository access で「Only select repositories」→ golf を選ぶ</li>
+            <li>Permissions → Repository permissions → Contents を「Read-only」に</li>
+            <li>Generate token を押して、出てきた github_pat_ で始まる文字をここに貼って保存</li>
+          </ol>
+        </details>
+      </div>
+
+      <div class="card">
+        <h2>記録から学習（Claude）</h2>
+        <p class="muted small">パソコンに入っている Claude Code（claude コマンド）に記録を読ませて、コーチのメモを作ります。
+          コマンドプロンプトで一度 <code>claude</code> を起動してログインしておいてください。Claude の利用枠を使います。</p>
+        <label class="field">claude コマンドの場所（ふつうは claude のままで大丈夫）
+          <input id="claude-cmd-input" type="text" placeholder="claude">
+        </label>
+        <label class="field">モデル
+          <input id="claude-model-input" type="text" placeholder="sonnet">
+        </label>
+        <button id="btn-claude" class="btn block">保存</button>
+      </div>
+
+      <div class="card">
+        <h2>フォルダ</h2>
+        <label class="field">取り込みフォルダ（長い動画を入れておく場所）
+          <input id="inbox-dir-input" type="text" placeholder="例: G:\マイドライブ\ゴルフ動画">
+        </label>
+        <button id="btn-inbox-dir" class="btn block">保存</button>
+        <p class="muted small">記録の保存先: <span id="data-dir" class="path"></span></p>
+      </div>
+      <div class="card">
+        <h2>データ</h2>
+        <div class="stack">
+          <button id="btn-export" class="btn block">バックアップをコピー</button>
+          <textarea id="backup-text" rows="4" placeholder="ここにバックアップのテキストを貼り付け" hidden></textarea>
+          <button id="btn-import-text" class="btn block">貼り付けたテキストから復元</button>
+          <label class="btn block file-btn">ファイルから復元
+            <input id="file-import" type="file" accept="application/json,.json,.txt" hidden>
+          </label>
+          <button id="btn-reset" class="btn danger block">全データを削除</button>
+          <p id="app-version" class="muted tiny center"></p>
+        </div>
+        <p class="muted small">記録はパソコンの「記録の保存先」に保存されます。</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-tab="practice" class="active"><span>🏌️</span>練習</button>
+    <button data-tab="drills"><span>🎯</span>ドリル</button>
+    <button data-tab="video"><span>🎥</span>動画</button>
+    <button data-tab="stats"><span>📊</span>分析</button>
+    <button data-tab="settings"><span>⚙️</span>設定</button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="setup" class="modal" hidden>
+    <div class="modal-box setup-box" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+      <h2 id="setup-title">はじめに（1分）</h2>
+      <p class="small">あとから設定タブでいつでも変えられます。</p>
+      <label class="field">身長（cm）　動画から頭の動きなどを cm で測るのに使います
+        <input id="setup-height" type="number" inputmode="numeric" min="100" max="230" value="170">
+      </label>
+      <label class="check-row"><input id="setup-lefty" type="checkbox"> 左打ち</label>
+      <div class="setup-ai">
+        <div class="strong">AI 分析を使う（無料・あとからでもOK）</div>
+        <ol class="small">
+          <li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio（ここを押す）</a>を開いて、Google アカウントでログイン</li>
+          <li>「API キーを作成」（Create API key）を押す</li>
+          <li>出てきた「AIza」で始まる文字をコピーして、下に貼る</li>
+        </ol>
+        <label class="field">Gemini の API キー（なくても計測・苦手・ドリルは使えます）
+          <input id="setup-key" type="password" autocomplete="off" placeholder="AIza...">
+        </label>
+      </div>
+      <button id="setup-ok" class="btn primary block">はじめる</button>
+    </div>
+  </div>
+  <div id="confirm" class="modal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="confirm-msg">
+      <p id="confirm-msg"></p>
+      <div class="grid2">
+        <button id="confirm-cancel" class="btn">キャンセル</button>
+        <button id="confirm-ok" class="btn danger"></button>
+      </div>
+    </div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

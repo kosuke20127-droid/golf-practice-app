@@ -1,0 +1,12 @@
+{
+  "name": "ゴルフ練習ノート",
+  "short_name": "ゴルフ練習",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f3f6f4",
+  "theme_color": "#1f7a4d",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
