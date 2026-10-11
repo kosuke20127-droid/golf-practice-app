@@ -80,7 +80,7 @@ def apply(token, app_dir):
         body = zf.read(n)
         if dst.exists() and dst.read_bytes() == body:
             continue
-        if rel in NO_TOUCH_WHILE_RUNNING:
+        if rel in NO_TOUCH_WHILE_RUNNING and dst.exists():
             dst.with_name(dst.name + ".new").write_bytes(body)
             notes.append(f"{rel} が変わりました。次に自分で起動し直すときに {rel}.new の名前を {rel} に変えてください。")
             continue
